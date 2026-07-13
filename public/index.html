@@ -66,6 +66,11 @@ html,body{height:100%;font-family:var(--font-body);background:var(--bg-darkest);
 .slot-name{font-size:12px;color:var(--text-muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color .2s;}
 .slot-item.active .slot-name,.slot-item:hover .slot-name{color:var(--text);}
 .slot-num{font-size:9px;color:var(--text-muted);opacity:.5;font-family:var(--font-mono);}
+
+/* ★ Temp user — sirf ek slot banner ★ */
+.temp-slot-banner{padding:10px 12px;margin:6px 8px;background:rgba(255,204,0,0.06);border:1px solid rgba(255,204,0,0.2);border-radius:8px;font-size:10px;color:var(--neon-yellow);text-align:center;}
+.temp-slot-banner strong{display:block;font-family:var(--font-head);font-size:11px;margin-bottom:2px;}
+
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden;background:var(--bg-mid);backdrop-filter:blur(8px);}
 .topbar{height:52px;background:rgba(8,8,20,0.7);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:14px;flex-shrink:0;backdrop-filter:blur(20px);position:relative;overflow:hidden;}
 .topbar::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--neon-blue) 20%,var(--neon-purple) 80%,transparent);animation:topbarGlow 5s ease-in-out infinite;}
@@ -116,6 +121,11 @@ html,body{height:100%;font-family:var(--font-body);background:var(--bg-darkest);
 .form-group input{width:100%;background:var(--glass);border:1px solid var(--glass-border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:12px;font-family:var(--font-body);outline:none;transition:border-color .25s,box-shadow .25s;}
 .form-group input:focus{border-color:var(--neon-blue);box-shadow:0 0 0 3px rgba(79,142,255,0.15);}
 .form-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+/* ★ Ping & FPS row ★ */
+.ping-fps-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;}
+.ping-fps-row .form-group{margin-bottom:0;}
+.ping-fps-hint{font-size:9px;color:var(--text-muted);margin-top:3px;}
+.ping-fps-hint span{color:var(--neon-cyan);}
 .players-list{display:flex;flex-direction:column;gap:4px;max-height:110px;overflow-y:auto;}
 .player-entry{font-size:12px;color:var(--neon-green);display:flex;align-items:center;gap:7px;padding:2px 0;animation:fadeInLeft .3s ease both;}
 .player-entry::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--neon-green);box-shadow:0 0 6px var(--neon-green);flex-shrink:0;}
@@ -180,7 +190,7 @@ html,body{height:100%;font-family:var(--font-body);background:var(--bg-darkest);
     <div class="sidebar-header">
       <div class="logo-row">
         <div class="logo-icon">⛏</div>
-        <div class="logo-text"><h2>MC AFK MANAGER</h2><p>100-Slot Bot Control Panel</p></div>
+        <div class="logo-text"><h2>MC AFK MANAGER</h2><p id="sidebar-subtitle">100-Slot Bot Control Panel</p></div>
       </div>
       <div class="stats-row">
         <div class="stat-box"><div class="val" id="stat-active">0</div><div class="lbl">Online</div></div>
@@ -188,8 +198,9 @@ html,body{height:100%;font-family:var(--font-body);background:var(--bg-darkest);
         <div class="stat-box"><div class="val muted" id="stat-free">100</div><div class="lbl">Free</div></div>
       </div>
     </div>
-    <div class="sidebar-search"><input id="slot-search" placeholder="🔍 Search slots..." oninput="filterSlots(this.value)"></div>
-    <div class="slot-list-header">Bot Slots</div>
+    <!-- ★ Temp user ke liye search hide hogi, sirf unka slot dikhega ★ -->
+    <div class="sidebar-search" id="search-box"><input id="slot-search" placeholder="🔍 Search slots..." oninput="filterSlots(this.value)"></div>
+    <div class="slot-list-header" id="slot-list-header">Bot Slots</div>
     <div class="slot-list" id="slot-list"></div>
   </div>
 
@@ -259,26 +270,212 @@ html,body{height:100%;font-family:var(--font-body);background:var(--bg-darkest);
 const socket=io();
 const MAX_SLOTS=100;
 let slotStatuses={},slotLogs={},activeSlot=null,deleteTarget=null;
+let currentUserType='admin', currentAllowedSlot=null; // ★ session info
+
 for(let i=1;i<=MAX_SLOTS;i++){slotStatuses[String(i)]={online:false,reconnecting:false,registered:false,username:null,host:null,playerCount:0,players:[]};slotLogs[String(i)]=[];}
 
 socket.on("botStatus",(data)=>{const id=String(data.slotId);slotStatuses[id]={...slotStatuses[id],...data};updateSidebarSlot(id);updateStats();if(activeSlot===id){updateTopbar(id);updatePlayersPanel(id);}});
 socket.on("botLog",(data)=>{const id=String(data.slotId);slotLogs[id]=[...(slotLogs[id]||[]).slice(-499),data];if(activeSlot===id)appendLog(data);});
 socket.on("slotDeleted",(data)=>{const id=String(data.slotId);slotStatuses[id]={online:false,reconnecting:false,registered:false,username:null,host:null,playerCount:0,players:[]};slotLogs[id]=[];updateSidebarSlot(id);updateStats();if(activeSlot===id)renderContent(id);});
 
-function buildSidebar(){const list=document.getElementById("slot-list");list.innerHTML="";const frag=document.createDocumentFragment();for(let i=1;i<=MAX_SLOTS;i++){const id=String(i),el=document.createElement("div");el.className="slot-item";el.id=`slot-item-${id}`;el.onclick=()=>selectSlot(id);el.innerHTML=`<div class="slot-dot" id="slot-dot-${id}"></div><div class="slot-name" id="slot-name-${id}">Slot ${i}</div><div class="slot-num">#${String(i).padStart(2,'0')}</div>`;frag.appendChild(el);}list.appendChild(frag);}
-function updateSidebarSlot(id){const s=slotStatuses[id],dot=document.getElementById(`slot-dot-${id}`),name=document.getElementById(`slot-name-${id}`),item=document.getElementById(`slot-item-${id}`);if(!dot)return;dot.className="slot-dot"+(s.online?" online":s.reconnecting?" reconnecting":s.registered?" registered":"");name.textContent=s.username?s.username:`Slot ${id}`;item.classList.toggle("active",activeSlot===id);}
-function filterSlots(q){const lower=q.toLowerCase();for(let i=1;i<=MAX_SLOTS;i++){const id=String(i),item=document.getElementById(`slot-item-${id}`);if(!item)continue;const s=slotStatuses[id],text=`slot ${id} ${s.username||""} ${s.host||""}`.toLowerCase();item.style.display=text.includes(lower)?"":"none";}}
-function updateStats(){let online=0,registered=0;for(let i=1;i<=MAX_SLOTS;i++){const s=slotStatuses[String(i)];if(s.online)online++;if(s.registered)registered++;}document.getElementById("stat-active").textContent=online;document.getElementById("stat-registered").textContent=registered;document.getElementById("stat-free").textContent=MAX_SLOTS-registered;const nsO=document.getElementById("ns-online"),nsR=document.getElementById("ns-reg");if(nsO)nsO.textContent=online;if(nsR)nsR.textContent=registered;}
-function selectSlot(id){if(activeSlot){const prev=document.getElementById(`slot-item-${activeSlot}`);if(prev)prev.classList.remove("active");}activeSlot=String(id);const item=document.getElementById(`slot-item-${id}`);if(item)item.classList.add("active");updateTopbar(id);renderContent(id);}
-function updateTopbar(id){const s=slotStatuses[id];document.getElementById("topbar-title").textContent=s.username?`⛏ SLOT ${id} — ${s.username.toUpperCase()}`:`⛏ SLOT ${id}`;const statusEl=document.getElementById("topbar-status");statusEl.style.display="";if(s.online){statusEl.textContent="● ONLINE";statusEl.className="topbar-status online";}else if(s.reconnecting){statusEl.textContent="⟳ RECONNECTING";statusEl.className="topbar-status reconnecting";}else{statusEl.textContent="○ OFFLINE";statusEl.className="topbar-status offline";}document.getElementById("topbar-host").textContent=s.host||"";}
-function renderContent(id){const s=slotStatuses[id],logs=slotLogs[id]||[];const sC=s.online?'var(--neon-green)':s.reconnecting?'var(--neon-yellow)':'var(--neon-red)',sI=s.online?'🟢 Online':s.reconnecting?'🟡 Reconnecting':'🔴 Offline';document.getElementById("main-content").innerHTML=`<div class="col-left"><div class="bot-embed"><div class="bot-embed-header"><div class="bot-avatar">⛏</div><div><div class="bot-embed-title">SLOT ${id} CONTROL</div><div class="bot-embed-sub">${s.registered?(s.username||"Registered"):"Not Registered"}</div></div></div><div class="embed-fields"><div class="embed-field"><div class="f-label">Status</div><div class="f-value" id="embed-status-${id}" style="color:${sC}">${sI}</div></div><div class="embed-field"><div class="f-label">Players</div><div class="f-value" id="embed-players-${id}" style="color:var(--neon-cyan)">${s.online?(s.playerCount??0):'—'}</div></div><div class="embed-field"><div class="f-label">Server</div><div class="f-value" style="font-size:10px;color:var(--text-muted)">${s.host||'—'}</div></div><div class="embed-field"><div class="f-label">Username</div><div class="f-value" style="font-size:10px">${s.username||'—'}</div></div></div><div class="btn-row"><button class="btn btn-blue" onclick="openRegisterForm('${id}')">📝 Register</button><button class="btn btn-green" onclick="startBot('${id}')" ${!s.registered?'disabled':''}>▶ Start</button><button class="btn btn-red" onclick="stopBot('${id}')" ${!s.online?'disabled':''}>⏹ Stop</button></div><div class="btn-row"><button class="btn btn-purple" onclick="restartBot('${id}')" ${!s.registered?'disabled':''}>🔄 Restart</button><button class="btn btn-grey" onclick="refreshStatus('${id}')">📊 Status</button><button class="btn btn-danger" onclick="openDeleteModal('${id}')">🗑 Delete</button></div></div><div class="card" id="players-card-${id}"><div class="card-title">Players Online <span style="color:var(--neon-cyan);margin-left:auto;font-family:var(--font-mono);font-size:12px">${s.playerCount??0}</span></div><div class="players-list" id="players-list-${id}">${s.online&&s.players?.length?s.players.map(p=>`<div class="player-entry">${escHtml(p)}</div>`).join(""):`<div style="color:var(--text-muted);font-size:11px">No players / Bot offline</div>`}</div></div><div class="card" id="register-form-${id}" style="display:none"><div class="card-title">📝 Register Slot ${id}</div><div class="form-group"><label>Server Host *</label><input id="f-host-${id}" placeholder="play.example.com" value="${escHtml(s.host||'')}"></div><div class="form-row"><div class="form-group"><label>Port</label><input id="f-port-${id}" type="number" placeholder="25565" value="${s.port||25565}"></div><div class="form-group"><label>MC Version</label><input id="f-ver-${id}" placeholder="auto" value="${escHtml(s.version||'auto')}"></div></div><div class="form-group"><label>Username *</label><input id="f-user-${id}" placeholder="AFKBot${id}" value="${escHtml(s.username||'')}"></div><div class="form-group"><label>Password (AuthMe)</label><input id="f-pass-${id}" type="password" placeholder="Leave blank if not needed"></div><div class="btn-row" style="margin-top:6px"><button class="btn btn-blue" onclick="registerSlot('${id}')">💾 Save & Register</button><button class="btn btn-grey" onclick="toggleForm('register-form-${id}')">Cancel</button></div></div></div><div class="col-right"><div class="card console-card"><div class="card-title">▌ Console — Slot ${id}<span style="margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--text-muted);font-weight:400;text-transform:none" id="log-count-${id}">${logs.length} messages</span></div><div class="console-output" id="console-${id}">${logs.length===0?`<div class="console-empty">No messages yet.<br>Start the bot to see live output.</div>`:logs.map(l=>logLineHTML(l)).join("")}</div><div class="chat-input-row"><span class="chat-prefix">›</span><input class="chat-input" id="chat-input-${id}" placeholder="${s.online?'Send message to Minecraft...':'Start the bot first...'}" ${!s.online?'disabled':''} onkeydown="if(event.key==='Enter')sendChat('${id}')"><button class="btn btn-blue" onclick="sendChat('${id}')" ${!s.online?'disabled':''}>SEND</button></div></div></div>`;scrollConsole(id);}
+/* ★ FIXED: Temp user ke liye sirf unka slot dono — admin ke liye sab ★ */
+function buildSidebar(){
+  const list=document.getElementById("slot-list");list.innerHTML="";
+  const frag=document.createDocumentFragment();
+
+  if(currentUserType==='temp'&&currentAllowedSlot){
+    // Temp user — sirf assigned slot dikhao
+    const id=String(currentAllowedSlot);
+    // Banner
+    const banner=document.createElement('div');
+    banner.className='temp-slot-banner';
+    banner.innerHTML=`<strong>🔒 Tumhara Assigned Slot</strong>Sirf Slot #${id} access kar sakte ho`;
+    frag.appendChild(banner);
+    // Single slot item
+    const el=document.createElement("div");
+    el.className="slot-item";el.id=`slot-item-${id}`;
+    el.onclick=()=>selectSlot(id);
+    el.innerHTML=`<div class="slot-dot" id="slot-dot-${id}"></div><div class="slot-name" id="slot-name-${id}">Slot ${id}</div><div class="slot-num">#${String(id).padStart(2,'0')}</div>`;
+    frag.appendChild(el);
+    // Search aur header hide karo
+    const sb=document.getElementById('search-box');if(sb)sb.style.display='none';
+    const sh=document.getElementById('slot-list-header');if(sh)sh.textContent='My Slot';
+    const sub=document.getElementById('sidebar-subtitle');if(sub)sub.textContent='Temp Account';
+  } else {
+    // Admin — sab slots
+    for(let i=1;i<=MAX_SLOTS;i++){
+      const id=String(i),el=document.createElement("div");
+      el.className="slot-item";el.id=`slot-item-${id}`;
+      el.onclick=()=>selectSlot(id);
+      el.innerHTML=`<div class="slot-dot" id="slot-dot-${id}"></div><div class="slot-name" id="slot-name-${id}">Slot ${i}</div><div class="slot-num">#${String(i).padStart(2,'0')}</div>`;
+      frag.appendChild(el);
+    }
+  }
+  list.appendChild(frag);
+}
+
+function updateSidebarSlot(id){
+  if(currentUserType==='temp'&&currentAllowedSlot&&String(id)!==String(currentAllowedSlot))return; // skip other slots for temp
+  const s=slotStatuses[id],dot=document.getElementById(`slot-dot-${id}`),name=document.getElementById(`slot-name-${id}`),item=document.getElementById(`slot-item-${id}`);
+  if(!dot)return;
+  dot.className="slot-dot"+(s.online?" online":s.reconnecting?" reconnecting":s.registered?" registered":"");
+  name.textContent=s.username?s.username:`Slot ${id}`;
+  item.classList.toggle("active",activeSlot===id);
+}
+
+function filterSlots(q){
+  if(currentUserType==='temp')return; // temp user ko filter nahi
+  const lower=q.toLowerCase();
+  for(let i=1;i<=MAX_SLOTS;i++){const id=String(i),item=document.getElementById(`slot-item-${id}`);if(!item)continue;const s=slotStatuses[id],text=`slot ${id} ${s.username||""} ${s.host||""}`.toLowerCase();item.style.display=text.includes(lower)?"":"none";}
+}
+
+function updateStats(){
+  let online=0,registered=0;
+  for(let i=1;i<=MAX_SLOTS;i++){const s=slotStatuses[String(i)];if(s.online)online++;if(s.registered)registered++;}
+  document.getElementById("stat-active").textContent=online;
+  document.getElementById("stat-registered").textContent=registered;
+  document.getElementById("stat-free").textContent=MAX_SLOTS-registered;
+  const nsO=document.getElementById("ns-online"),nsR=document.getElementById("ns-reg");
+  if(nsO)nsO.textContent=online;if(nsR)nsR.textContent=registered;
+}
+
+function selectSlot(id){
+  if(activeSlot){const prev=document.getElementById(`slot-item-${activeSlot}`);if(prev)prev.classList.remove("active");}
+  activeSlot=String(id);
+  const item=document.getElementById(`slot-item-${id}`);if(item)item.classList.add("active");
+  updateTopbar(id);renderContent(id);
+}
+
+function updateTopbar(id){
+  const s=slotStatuses[id];
+  document.getElementById("topbar-title").textContent=s.username?`⛏ SLOT ${id} — ${s.username.toUpperCase()}`:`⛏ SLOT ${id}`;
+  const statusEl=document.getElementById("topbar-status");statusEl.style.display="";
+  if(s.online){statusEl.textContent="● ONLINE";statusEl.className="topbar-status online";}
+  else if(s.reconnecting){statusEl.textContent="⟳ RECONNECTING";statusEl.className="topbar-status reconnecting";}
+  else{statusEl.textContent="○ OFFLINE";statusEl.className="topbar-status offline";}
+  document.getElementById("topbar-host").textContent=s.host||"";
+}
+
+/* ★ FIXED: Register form mein Ping & FPS fields add kiye ★ */
+function renderContent(id){
+  const s=slotStatuses[id],logs=slotLogs[id]||[];
+  const sC=s.online?'var(--neon-green)':s.reconnecting?'var(--neon-yellow)':'var(--neon-red)';
+  const sI=s.online?'🟢 Online':s.reconnecting?'🟡 Reconnecting':'🔴 Offline';
+  const isAdmin=(currentUserType==='admin');
+
+  document.getElementById("main-content").innerHTML=`
+  <div class="col-left">
+    <div class="bot-embed">
+      <div class="bot-embed-header">
+        <div class="bot-avatar">⛏</div>
+        <div><div class="bot-embed-title">SLOT ${id} CONTROL</div>
+        <div class="bot-embed-sub">${s.registered?(s.username||"Registered"):"Not Registered"}</div></div>
+      </div>
+      <div class="embed-fields">
+        <div class="embed-field"><div class="f-label">Status</div><div class="f-value" id="embed-status-${id}" style="color:${sC}">${sI}</div></div>
+        <div class="embed-field"><div class="f-label">Players</div><div class="f-value" id="embed-players-${id}" style="color:var(--neon-cyan)">${s.online?(s.playerCount??0):'—'}</div></div>
+        <div class="embed-field"><div class="f-label">Server</div><div class="f-value" style="font-size:10px;color:var(--text-muted)">${s.host||'—'}</div></div>
+        <div class="embed-field"><div class="f-label">Username</div><div class="f-value" style="font-size:10px">${s.username||'—'}</div></div>
+        <div class="embed-field"><div class="f-label">⚡ Ping</div><div class="f-value" style="font-size:10px;color:var(--neon-cyan)">${s.pingInterval?s.pingInterval+'s':'default'}</div></div>
+        <div class="embed-field"><div class="f-label">🎮 FPS</div><div class="f-value" style="font-size:10px;color:var(--neon-cyan)">${s.fps?s.fps+' fps':'default'}</div></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-blue" onclick="openRegisterForm('${id}')">📝 Register</button>
+        <button class="btn btn-green" onclick="startBot('${id}')" ${!s.registered?'disabled':''}>▶ Start</button>
+        <button class="btn btn-red" onclick="stopBot('${id}')" ${!s.online?'disabled':''}>⏹ Stop</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-purple" onclick="restartBot('${id}')" ${!s.registered?'disabled':''}>🔄 Restart</button>
+        <button class="btn btn-grey" onclick="refreshStatus('${id}')">📊 Status</button>
+        ${isAdmin?`<button class="btn btn-danger" onclick="openDeleteModal('${id}')">🗑 Delete</button>`:''}
+      </div>
+    </div>
+
+    <div class="card" id="players-card-${id}">
+      <div class="card-title">Players Online <span style="color:var(--neon-cyan);margin-left:auto;font-family:var(--font-mono);font-size:12px">${s.playerCount??0}</span></div>
+      <div class="players-list" id="players-list-${id}">
+        ${s.online&&s.players?.length?s.players.map(p=>`<div class="player-entry">${escHtml(p)}</div>`).join(""):`<div style="color:var(--text-muted);font-size:11px">No players / Bot offline</div>`}
+      </div>
+    </div>
+
+    <!-- ★ FIXED: Register form with Ping & FPS ★ -->
+    <div class="card" id="register-form-${id}" style="display:none">
+      <div class="card-title">📝 Register Slot ${id}</div>
+      <div class="form-group"><label>Server Host *</label><input id="f-host-${id}" placeholder="play.example.com" value="${escHtml(s.host||'')}"></div>
+      <div class="form-row">
+        <div class="form-group"><label>Port</label><input id="f-port-${id}" type="number" placeholder="25565" value="${s.port||25565}"></div>
+        <div class="form-group"><label>MC Version</label><input id="f-ver-${id}" placeholder="auto" value="${escHtml(s.version||'auto')}"></div>
+      </div>
+      <div class="form-group"><label>Username *</label><input id="f-user-${id}" placeholder="AFKBot${id}" value="${escHtml(s.username||'')}"></div>
+      <div class="form-group"><label>Password (AuthMe)</label><input id="f-pass-${id}" type="password" placeholder="Leave blank if not needed"></div>
+
+      <!-- ★ Ping & FPS Settings ★ -->
+      <div style="margin-bottom:6px;font-family:var(--font-head);font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--neon-cyan);">⚡ Bot Performance Settings</div>
+      <div class="ping-fps-row">
+        <div class="form-group">
+          <label>Ping Interval (seconds)</label>
+          <input id="f-ping-${id}" type="number" min="5" max="300" placeholder="default: 30" value="${s.pingInterval||''}">
+          <div class="ping-fps-hint">AFK move <span>kitne seconds</span> mein — default 30s</div>
+        </div>
+        <div class="form-group">
+          <label>FPS (1–60)</label>
+          <input id="f-fps-${id}" type="number" min="1" max="60" placeholder="default: 20" value="${s.fps||''}">
+          <div class="ping-fps-hint">Bot ka <span>physics rate</span> — default 20fps</div>
+        </div>
+      </div>
+
+      <div class="btn-row" style="margin-top:6px">
+        <button class="btn btn-blue" onclick="registerSlot('${id}')">💾 Save & Register</button>
+        <button class="btn btn-grey" onclick="toggleRegisterForm('${id}')">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-right">
+    <div class="card console-card">
+      <div class="card-title">▌ Console — Slot ${id}<span style="margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--text-muted);font-weight:400;text-transform:none" id="log-count-${id}">${logs.length} messages</span></div>
+      <div class="console-output" id="console-${id}">
+        ${logs.length===0?`<div class="console-empty">No messages yet.<br>Start the bot to see live output.</div>`:logs.map(l=>logLineHTML(l)).join("")}
+      </div>
+      <div class="chat-input-row">
+        <span class="chat-prefix">›</span>
+        <input class="chat-input" id="chat-input-${id}" placeholder="${s.online?'Send message to Minecraft...':'Start the bot first...'}" ${!s.online?'disabled':''} onkeydown="if(event.key==='Enter')sendChat('${id}')">
+        <button class="btn btn-blue" onclick="sendChat('${id}')" ${!s.online?'disabled':''}>SEND</button>
+      </div>
+    </div>
+  </div>`;
+  scrollConsole(id);
+}
+
 function logLineHTML(l){const time=new Date(l.timestamp).toTimeString().slice(0,8);const sc=l.sender==="[System]"?"system":l.sender==="[Server]"?"server":l.sender==="[Error]"?"error":"player";return`<div class="log-line"><span class="log-time">[${time}]</span><span class="log-sender ${sc}">${escHtml(l.sender)}</span><span class="log-msg">${escHtml(l.message)}</span></div>`;}
 function appendLog(l){const con=document.getElementById(`console-${activeSlot}`);if(!con)return;const empty=con.querySelector(".console-empty");if(empty)empty.remove();const div=document.createElement("div");div.innerHTML=logLineHTML(l);con.appendChild(div.firstChild);scrollConsole(activeSlot);const cnt=document.getElementById(`log-count-${activeSlot}`);if(cnt)cnt.textContent=`${slotLogs[activeSlot]?.length||0} messages`;}
 function scrollConsole(id){const con=document.getElementById(`console-${id}`);if(con)con.scrollTop=con.scrollHeight;}
 function updatePlayersPanel(id){const s=slotStatuses[id];const sC=s.online?'var(--neon-green)':s.reconnecting?'var(--neon-yellow)':'var(--neon-red)',sI=s.online?'🟢 Online':s.reconnecting?'🟡 Reconnecting':'🔴 Offline';const el=document.getElementById(`embed-status-${id}`),pc=document.getElementById(`embed-players-${id}`),list=document.getElementById(`players-list-${id}`),card=document.getElementById(`players-card-${id}`);if(el){el.textContent=sI;el.style.color=sC;}if(pc)pc.textContent=s.online?(s.playerCount??0):'—';if(list)list.innerHTML=s.online&&s.players?.length?s.players.map(p=>`<div class="player-entry">${escHtml(p)}</div>`).join(""):`<div style="color:var(--text-muted);font-size:11px">No players / Bot offline</div>`;if(card){const t=card.querySelector(".card-title");if(t)t.innerHTML=`Players Online <span style="color:var(--neon-cyan);margin-left:auto;font-family:var(--font-mono);font-size:12px">${s.online?(s.playerCount??0):0}</span>`;}const ci=document.getElementById(`chat-input-${id}`),sb=ci?.nextElementSibling;if(ci){ci.disabled=!s.online;ci.placeholder=s.online?"Send message to Minecraft...":"Start the bot first...";}if(sb)sb.disabled=!s.online;updateTopbar(id);}
-function toggleForm(id){const el=document.getElementById(id);if(el)el.style.display=el.style.display==="none"?"":"";}
-function openRegisterForm(id){const form=document.getElementById(`register-form-${id}`);if(!form)return;form.style.display=form.style.display==="none"?"":"none";fetch(`/api/slot/${id}/settings`).then(r=>r.json()).then(data=>{if(data.host){setVal(`f-host-${id}`,data.host);setVal(`f-port-${id}`,data.port);setVal(`f-ver-${id}`,data.version);setVal(`f-user-${id}`,data.username);}}).catch(()=>{});}
-async function registerSlot(id){const host=getVal(`f-host-${id}`),port=getVal(`f-port-${id}`)||"25565",version=getVal(`f-ver-${id}`)||"auto",username=getVal(`f-user-${id}`),password=getVal(`f-pass-${id}`)||null;if(!host||!username){showToast("Host and Username are required!",true);return;}try{await apiFetch(`/api/slot/${id}/register`,"POST",{host,port:Number(port),version,username,password});slotStatuses[id]={...slotStatuses[id],host,username,registered:true};document.getElementById(`register-form-${id}`).style.display="none";updateSidebarSlot(id);updateStats();renderContent(id);showToast(`✅ Slot ${id} registered!`);}catch(e){showToast(e.message||"Failed",true);}}
+
+function toggleRegisterForm(id){const form=document.getElementById(`register-form-${id}`);if(form)form.style.display=form.style.display==="none"?"":"none";}
+function openRegisterForm(id){
+  const form=document.getElementById(`register-form-${id}`);if(!form)return;
+  form.style.display=form.style.display==="none"?"":"none";
+  fetch(`/api/slot/${id}/settings`,{headers:{'Authorization':'Bearer '+(localStorage.getItem('mc_token')||'')}}).then(r=>r.json()).then(data=>{
+    if(data.host){setVal(`f-host-${id}`,data.host);setVal(`f-port-${id}`,data.port);setVal(`f-ver-${id}`,data.version);setVal(`f-user-${id}`,data.username);}
+    if(data.pingInterval)setVal(`f-ping-${id}`,data.pingInterval);
+    if(data.fps)setVal(`f-fps-${id}`,data.fps);
+  }).catch(()=>{});
+}
+
+/* ★ FIXED: Ping & FPS bhi register karo ★ */
+async function registerSlot(id){
+  const host=getVal(`f-host-${id}`),port=getVal(`f-port-${id}`)||"25565",version=getVal(`f-ver-${id}`)||"auto",username=getVal(`f-user-${id}`),password=getVal(`f-pass-${id}`)||null;
+  const pingInterval=getVal(`f-ping-${id}`)||null, fps=getVal(`f-fps-${id}`)||null;
+  if(!host||!username){showToast("Host and Username are required!",true);return;}
+  try{
+    await apiFetch(`/api/slot/${id}/register`,"POST",{host,port:Number(port),version,username,password,pingInterval:pingInterval?Number(pingInterval):null,fps:fps?Number(fps):null});
+    slotStatuses[id]={...slotStatuses[id],host,username,registered:true,pingInterval:pingInterval?Number(pingInterval):null,fps:fps?Number(fps):null};
+    document.getElementById(`register-form-${id}`).style.display="none";
+    updateSidebarSlot(id);updateStats();renderContent(id);
+    showToast(`✅ Slot ${id} registered!`+(pingInterval?` Ping:${pingInterval}s`:'')+(fps?` FPS:${fps}`:''));
+  }catch(e){showToast(e.message||"Failed",true);}
+}
 async function startBot(id){try{await apiFetch(`/api/slot/${id}/start`,"POST");showToast(`▶ Slot ${id}: Bot starting...`);}catch(e){showToast(e.message||"Failed",true);}}
 async function stopBot(id){try{await apiFetch(`/api/slot/${id}/stop`,"POST");showToast(`⏹ Slot ${id}: Bot stopped.`);}catch(e){showToast(e.message||"Failed",true);}}
 async function restartBot(id){try{await apiFetch(`/api/slot/${id}/restart`,"POST");showToast(`🔄 Slot ${id}: Restarting...`);}catch(e){showToast(e.message||"Failed",true);}}
@@ -294,21 +491,51 @@ function escHtml(str){return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt
 let toastTimer=null;
 function showToast(msg,isError=false){const t=document.getElementById("toast");t.textContent=msg;t.className="toast"+(isError?" error":"");clearTimeout(toastTimer);toastTimer=setTimeout(()=>{t.classList.add("hide");},3500);}
 
-async function loadInitial(){try{const data=await apiFetch("/api/slots","GET");for(const[id,info]of Object.entries(data)){slotStatuses[id]={...slotStatuses[id],...info};}}catch{}buildSidebar();for(let i=1;i<=MAX_SLOTS;i++)updateSidebarSlot(String(i));updateStats();}
-loadInitial();
-initSession();
+async function loadInitial(){
+  try{const data=await apiFetch("/api/slots","GET");for(const[id,info]of Object.entries(data)){slotStatuses[id]={...slotStatuses[id],...info};}}catch{}
+  buildSidebar();
+  if(currentUserType==='temp'&&currentAllowedSlot){
+    // Temp user ke liye apna slot auto-select karo
+    for(let i=1;i<=MAX_SLOTS;i++)updateSidebarSlot(String(i));
+    updateStats();
+    selectSlot(String(currentAllowedSlot));
+  } else {
+    for(let i=1;i<=MAX_SLOTS;i++)updateSidebarSlot(String(i));
+    updateStats();
+  }
+}
 
+/* ★ FIXED: initSession ab allowedSlot bhi handle karta hai ★ */
 function initSession(){
-  const token=localStorage.getItem('mc_token'),username=localStorage.getItem('mc_user')||'user',type=localStorage.getItem('mc_type')||'temp',exp=Number(localStorage.getItem('mc_exp')||0);
+  const token=localStorage.getItem('mc_token'),username=localStorage.getItem('mc_user')||'user';
+  const type=localStorage.getItem('mc_type')||'temp',exp=Number(localStorage.getItem('mc_exp')||0);
+  const allowedSlot=localStorage.getItem('mc_slot')||null;
+
   if(!token){window.location.replace('login.html');return;}
+
+  currentUserType=type;
+  currentAllowedSlot=allowedSlot;
+
   const tbU=document.getElementById('tb-username');if(tbU)tbU.textContent='👤 '+username;
   const tbBadge=document.getElementById('tb-badge'),tbAdmin=document.getElementById('tb-admin');
-  if(type==='admin'){if(tbBadge){tbBadge.textContent='ADMIN';tbBadge.style.display='';tbBadge.style.background='rgba(159,111,255,0.12)';tbBadge.style.border='1px solid rgba(159,111,255,0.3)';tbBadge.style.color='var(--neon-purple)';}if(tbAdmin)tbAdmin.style.display='';}
-  else{if(tbBadge){tbBadge.textContent='TEMP';tbBadge.style.display='';tbBadge.style.background='rgba(255,204,0,0.08)';tbBadge.style.border='1px solid rgba(255,204,0,0.25)';tbBadge.style.color='var(--neon-yellow)';}}
-  if(type!=='admin'&&exp>0){const tbTimer=document.getElementById('tb-timer');if(tbTimer)tbTimer.style.display='';function updateTimer(){const ms=exp-Date.now();if(ms<=0){showToast('⏰ Session expired!',true);setTimeout(()=>doLogout(),2000);return;}if(tbTimer){const h=Math.floor(ms/3600000),m=Math.floor((ms%3600000)/60000),s=Math.floor((ms%60000)/1000);const txt=h>0?`⏱ ${h}h ${String(m).padStart(2,'0')}m`:`⏱ ${m}m ${String(s).padStart(2,'0')}s`;tbTimer.textContent=txt;tbTimer.style.color=ms<300000?'var(--neon-red)':ms<3600000?'var(--neon-yellow)':'var(--neon-cyan)';}}updateTimer();setInterval(updateTimer,1000);}
+  if(type==='admin'){
+    if(tbBadge){tbBadge.textContent='ADMIN';tbBadge.style.display='';tbBadge.style.background='rgba(159,111,255,0.12)';tbBadge.style.border='1px solid rgba(159,111,255,0.3)';tbBadge.style.color='var(--neon-purple)';}
+    if(tbAdmin)tbAdmin.style.display='';
+  } else {
+    if(tbBadge){tbBadge.textContent='TEMP';tbBadge.style.display='';tbBadge.style.background='rgba(255,204,0,0.08)';tbBadge.style.border='1px solid rgba(255,204,0,0.25)';tbBadge.style.color='var(--neon-yellow)';}
+  }
+  if(type!=='admin'&&exp>0){
+    const tbTimer=document.getElementById('tb-timer');if(tbTimer)tbTimer.style.display='';
+    function updateTimer(){const ms=exp-Date.now();if(ms<=0){showToast('⏰ Session expired!',true);setTimeout(()=>doLogout(),2000);return;}if(tbTimer){const h=Math.floor(ms/3600000),m=Math.floor((ms%3600000)/60000),s=Math.floor((ms%60000)/1000);const txt=h>0?`⏱ ${h}h ${String(m).padStart(2,'0')}m`:`⏱ ${m}m ${String(s).padStart(2,'0')}s`;tbTimer.textContent=txt;tbTimer.style.color=ms<300000?'var(--neon-red)':ms<3600000?'var(--neon-yellow)':'var(--neon-cyan)';}}
+    updateTimer();setInterval(updateTimer,1000);
+  }
   setInterval(async()=>{try{const r=await fetch('/api/auth/verify',{headers:{'Authorization':'Bearer '+token}});if(!r.ok){showToast('⚠ Session expired!',true);setTimeout(()=>doLogout(),2000);}}catch{}},60000);
 }
+
 async function doLogout(){const token=localStorage.getItem('mc_token');try{if(token)await fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+token}});}catch{}localStorage.clear();document.cookie='mc_token=; path=/; max-age=0';window.location.replace('login.html');}
+
+initSession();
+loadInitial();
 </script>
 </body>
 </html>
