@@ -140,7 +140,7 @@ app.post("/api/auth/login", (req, res) => {
   const token   = generateToken();
   const session = { token, username, type: "temp", expiresAt: account.expiresAt, tempAccountId: account.id };
   d.sessions.push(session); saveAuthData(d);
-  res.json({ success: true, token, type: "temp", expiresAt: account.expiresAt, username });
+  res.json({ success: true, token, type: "temp", expiresAt: account.expiresAt, username, allowedSlot: account.allowedSlot });
 });
 
 // ─── GET /api/auth/verify ─────────────────────────────────────────────────────
@@ -178,6 +178,7 @@ app.post("/api/admin/temp-accounts", requireAdmin, (req, res) => {
   const account = {
     id: crypto.randomUUID(), username,
     passwordHash: hashPassword(password),
+    plainPassword: password,   // ← Admin ke liye stored (sirf admin dekh sakta hai)
     createdAt: now, expiresAt: now+totalMs,
     label: label||username, revoked: false,
     allowedSlot: String(slotNum),
@@ -190,6 +191,21 @@ app.post("/api/admin/temp-accounts", requireAdmin, (req, res) => {
 app.get("/api/admin/temp-accounts", requireAdmin, (_req, res) => {
   const d = purgeAuthData(loadAuthData());
   res.json({ accounts: d.tempAccounts.map(sanitizeAccount) });
+});
+
+// ─── GET /api/admin/temp-accounts/passwords (admin only — passwords dekho) ────
+app.get("/api/admin/temp-accounts/passwords", requireAdmin, (_req, res) => {
+  const d = purgeAuthData(loadAuthData());
+  const result = d.tempAccounts.map(a => ({
+    id: a.id,
+    username: a.username,
+    label: a.label,
+    plainPassword: a.plainPassword || "N/A (purana account)",
+    allowedSlot: a.allowedSlot,
+    expiresAt: a.expiresAt,
+    revoked: a.revoked,
+  }));
+  res.json({ accounts: result });
 });
 
 // ─── DELETE /api/admin/temp-accounts/:id ─────────────────────────────────────
@@ -219,7 +235,7 @@ function sanitizeAccount(a) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  BOT SYSTEM (original)
+//  BOT SYSTEM
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const RECONNECT_BASE_MS = 8_000;
@@ -271,8 +287,10 @@ function emitLog(slotId, sender, message) {
 
 // ─── AFK helpers ──────────────────────────────────────────────────────────────
 function stopAfk(state) { if(state.afkTimer){clearInterval(state.afkTimer);state.afkTimer=null;} }
-function startAfk(state) {
+function startAfk(state, cfg) {
   stopAfk(state);
+  // Custom ping interval — default 30-40s agar set nahi
+  const baseInterval = cfg?.pingInterval ? Number(cfg.pingInterval) * 1000 : 30_000;
   state.afkTimer = setInterval(()=>{
     if(!state.bot?.entity) return;
     try {
@@ -280,7 +298,7 @@ function startAfk(state) {
       if(Math.random()<0.25){state.bot.setControlState("forward",true);setTimeout(()=>state.bot?.setControlState("forward",false),200);}
       if(Math.random()<0.15){state.bot.setControlState("jump",true);setTimeout(()=>state.bot?.setControlState("jump",false),350);}
     } catch {}
-  }, 30_000+Math.random()*10_000);
+  }, baseInterval + Math.random()*10_000);
 }
 
 // ─── Reconnect helpers ────────────────────────────────────────────────────────
@@ -311,17 +329,26 @@ function scheduleReconnect(state, delayOverrideMs) {
 // ─── Core bot factory ─────────────────────────────────────────────────────────
 function createMineflayerBot(slotId, cfg) {
   const state=getState(slotId); state.destroyed=false;
+
+  // FPS → physicsInterval (ms per tick). Default 50ms = 20fps
+  const physicsTick = cfg.fps ? Math.round(1000 / Number(cfg.fps)) : 50;
+
   const b=mineflayer.createBot({
     host:cfg.host, port:Number(cfg.port)||25565, username:cfg.username,
     version:cfg.version&&cfg.version!=="auto"?cfg.version:false,
-    auth:"offline", hideErrors:true, physicsEnabled:false, checkTimeoutInterval:30_000,
+    auth:"offline", hideErrors:true, physicsEnabled:true,
+    checkTimeoutInterval:30_000,
+    // physicsInterval agar mineflayer version support kare
+    ...(physicsTick !== 50 ? { physicsInterval: physicsTick } : {}),
   });
   state.bot=b;
   b.once("spawn",()=>{
     if(b!==state.bot) return;
     state.reconnectAttempts=0; state.isReconnecting=false; emitStatus(slotId);
-    emitLog(slotId,"[System]",`✅ Joined ${cfg.host}:${cfg.port||25565} as ${cfg.username}`);
-    startAfk(state);
+    const pingMs = cfg.pingInterval ? `${cfg.pingInterval}s ping` : "default ping";
+    const fpsVal = cfg.fps ? `${cfg.fps} FPS` : "default FPS";
+    emitLog(slotId,"[System]",`✅ Joined ${cfg.host}:${cfg.port||25565} as ${cfg.username} [${pingMs}, ${fpsVal}]`);
+    startAfk(state, cfg);
     // Decrypt password before sending to Minecraft
     const rp = decryptPass(cfg.password);
     if(rp) setTimeout(()=>{if(b!==state.bot)return;try{b.chat(`/login ${rp}`);}catch{}},1_500);
@@ -376,22 +403,28 @@ function restartSlot(slotId) { stopSlot(slotId); setTimeout(()=>startSlot(slotId
 // Bot routes
 app.get("/api/slots", (_req, res) => {
   const result={};
-  for(let i=1;i<=MAX_SLOTS;i++){const id=String(i),data=slotsData[id]??null,state=getState(id);result[id]={registered:data?.registered??false,username:data?.username??null,host:data?.host??null,online:!!(state.bot?.entity),reconnecting:state.isReconnecting};}
+  for(let i=1;i<=MAX_SLOTS;i++){const id=String(i),data=slotsData[id]??null,state=getState(id);result[id]={registered:data?.registered??false,username:data?.username??null,host:data?.host??null,online:!!(state.bot?.entity),reconnecting:state.isReconnecting,pingInterval:data?.pingInterval??null,fps:data?.fps??null};}
   res.json(result);
 });
 app.get("/api/slot/:id/status",(req,res)=>{
   const id=req.params.id,state=getState(id),data=getSlotData(id),online=!!(state.bot?.entity),players=online?Object.values(state.bot.players??{}).map(p=>p.username):[];
-  res.json({slotId:id,registered:data?.registered??false,online,reconnecting:state.isReconnecting,playerCount:players.length,players,host:data?.host??null,username:data?.username??null});
+  res.json({slotId:id,registered:data?.registered??false,online,reconnecting:state.isReconnecting,playerCount:players.length,players,host:data?.host??null,username:data?.username??null,pingInterval:data?.pingInterval??null,fps:data?.fps??null});
 });
 app.post("/api/slot/:id/register",(req,res)=>{
   const id=req.params.id,num=Number(id);
   if(!num||num<1||num>MAX_SLOTS){res.status(400).json({error:"Invalid slot ID (1-100)"});return;}
-  const{host,port,version,username,password}=req.body;
+  const{host,port,version,username,password,pingInterval,fps}=req.body;
   if(!host||!username){res.status(400).json({error:"host and username required"});return;}
   const existing=getSlotData(id)??{};
-  // Encrypt password before saving to disk
-  setSlotData(id,{...existing,host,port:Number(port)||25565,version:version||"auto",username,password:encryptPass(password),registered:true});
-  emitLog(id,"[System]",`📝 Slot ${id} registered: ${username} @ ${host}`);
+  setSlotData(id,{
+    ...existing,
+    host, port:Number(port)||25565, version:version||"auto", username,
+    password:encryptPass(password),
+    registered:true,
+    pingInterval: pingInterval ? Number(pingInterval) : null,
+    fps: fps ? Number(fps) : null,
+  });
+  emitLog(id,"[System]",`📝 Slot ${id} registered: ${username} @ ${host} [ping:${pingInterval||'default'}s, fps:${fps||'default'}]`);
   res.json({ok:true});
 });
 app.post("/api/slot/:id/start",(req,res)=>{const result=startSlot(req.params.id);if(!result.ok){res.status(400).json(result);return;}emitLog(req.params.id,"[System]","🚀 Bot starting...");res.json(result);});
@@ -407,11 +440,18 @@ app.delete("/api/slot/:id",(req,res)=>{
   const id=req.params.id; stopSlot(id); deleteSlotData(id);
   emitLog(id,"[System]",`🗑 Slot ${id} deleted.`); io.emit("slotDeleted",{slotId:id}); res.json({ok:true});
 });
-// Settings API — password kabhi return nahi hoga
+// Settings API — password kabhi return nahi hoga (public endpoint)
 app.get("/api/slot/:id/settings",(req,res)=>{
   const d=getSlotData(req.params.id)??{};
   const{password:_,...safe}=d; // password hata do
   res.json(safe);
+});
+// Admin-only: bot ka password dekho
+app.get("/api/admin/slot/:id/password", requireAdmin, (req,res)=>{
+  const d=getSlotData(req.params.id);
+  if(!d?.registered){res.status(404).json({error:"Slot not registered"});return;}
+  const plain=decryptPass(d.password);
+  res.json({slotId:req.params.id, username:d.username, password:plain||"(no password set)"});
 });
 app.get("/api/healthz",(_req,res)=>res.json({status:"ok",activeBots:[...botStates.values()].filter(s=>s.bot?.entity).length}));
 app.get("/health",(_req,res)=>res.json({status:"ok",uptime:process.uptime(),activeBots:[...botStates.values()].filter(s=>s.bot?.entity).length}));
@@ -433,14 +473,14 @@ for(const[id,data]of Object.entries(slotsData)){
 
 // ─── Self-ping keep-alive (Render 24/7) ──────────────────────────────────────
 const pingTarget =
-  process.env.APP_URL ||                          // tumhara custom env var
-  process.env.RENDER_EXTERNAL_URL ||              // Render automatic
-  process.env.REPLIT_DOMAINS;                     // Replit automatic
+  process.env.APP_URL ||
+  process.env.RENDER_EXTERNAL_URL ||
+  process.env.REPLIT_DOMAINS;
 
 if (pingTarget) {
   const base    = pingTarget.startsWith("http") ? pingTarget : `https://${pingTarget.split(",")[0]}`;
   const selfUrl = `${base}/health`;
-  const interval= parseInt(process.env.PING_INTERVAL_MS) || 4 * 60_000; // default 4 min
+  const interval= parseInt(process.env.PING_INTERVAL_MS) || 4 * 60_000;
   setInterval(async()=>{
     try{
       await fetch(selfUrl);
