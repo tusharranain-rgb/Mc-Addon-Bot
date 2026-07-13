@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MC AFK Manager — Login</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+:root{--neon-blue:#4f8eff;--neon-purple:#9f6fff;--neon-green:#00ffaa;--neon-cyan:#00e5ff;--neon-red:#ff4466;--bg:#050508;--text:#e2e8ff;--muted:#6b7bb8;}
+html,body{height:100%;font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);overflow:hidden;}
+#bg-video{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);min-width:100vw;min-height:100vh;object-fit:cover;z-index:0;opacity:0.22;filter:saturate(1.5) hue-rotate(10deg);}
+.bg-overlay{position:fixed;inset:0;z-index:1;background:radial-gradient(ellipse 80% 60% at 30% 40%,rgba(79,142,255,0.12) 0%,transparent 60%),radial-gradient(ellipse 60% 80% at 70% 60%,rgba(159,111,255,0.1) 0%,transparent 60%),rgba(5,5,8,0.82);pointer-events:none;}
+canvas{position:fixed;inset:0;z-index:2;pointer-events:none;}
+.page{position:relative;z-index:10;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;}
+.brand{display:flex;flex-direction:column;align-items:center;margin-bottom:30px;animation:floatIn .7s cubic-bezier(.34,1.56,.64,1) both;}
+.brand-icon{width:72px;height:72px;border-radius:20px;background:linear-gradient(135deg,var(--neon-blue),var(--neon-purple));display:flex;align-items:center;justify-content:center;font-size:36px;margin-bottom:14px;box-shadow:0 0 30px rgba(79,142,255,0.6),0 0 80px rgba(79,142,255,0.2);animation:iconPulse 3s ease-in-out infinite;}
+@keyframes iconPulse{0%,100%{box-shadow:0 0 30px rgba(79,142,255,0.6),0 0 80px rgba(79,142,255,0.2);}50%{box-shadow:0 0 50px rgba(79,142,255,0.9),0 0 120px rgba(159,111,255,0.4);}}
+.brand h1{font-family:'Orbitron',monospace;font-size:20px;font-weight:900;color:#fff;letter-spacing:3px;text-shadow:0 0 20px rgba(79,142,255,0.8);text-align:center;}
+.brand p{font-size:11px;color:var(--muted);margin-top:4px;letter-spacing:1px;text-transform:uppercase;}
+.card{width:100%;max-width:400px;background:rgba(10,10,25,0.92);border:1px solid rgba(79,142,255,0.2);border-radius:16px;padding:30px;backdrop-filter:blur(24px);box-shadow:0 20px 60px rgba(0,0,0,0.6),0 0 40px rgba(79,142,255,0.08);position:relative;overflow:hidden;animation:cardIn .6s cubic-bezier(.34,1.56,.64,1) .1s both;}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--neon-blue) 30%,var(--neon-purple) 70%,transparent);animation:topLine 4s ease-in-out infinite;}
+@keyframes topLine{0%,100%{opacity:.4}50%{opacity:1}}
+.card-title{font-family:'Orbitron',monospace;font-size:12px;font-weight:700;color:var(--neon-blue);letter-spacing:2px;margin-bottom:22px;text-align:center;display:flex;align-items:center;justify-content:center;gap:8px;}
+.card-title::before,.card-title::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,transparent,rgba(79,142,255,0.4));}
+.card-title::after{background:linear-gradient(270deg,transparent,rgba(79,142,255,0.4));}
+.field{margin-bottom:16px;}
+.field label{display:block;font-family:'Orbitron',monospace;font-size:9px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:6px;}
+.input-wrap{position:relative;}
+.input-wrap .ico{position:absolute;left:13px;top:50%;transform:translateY(-50%);font-size:14px;pointer-events:none;opacity:.5;}
+.field input{width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:11px 13px 11px 40px;color:var(--text);font-size:14px;font-family:'Inter',sans-serif;outline:none;transition:border-color .25s,box-shadow .25s;}
+.field input::placeholder{color:var(--muted);}
+.field input:focus{border-color:var(--neon-blue);box-shadow:0 0 0 3px rgba(79,142,255,0.15);}
+.btn-login{width:100%;padding:13px;background:linear-gradient(135deg,#3a6fcc,#4f8eff);border:none;border-radius:10px;color:#fff;font-size:12px;font-weight:700;font-family:'Orbitron',monospace;letter-spacing:2px;cursor:pointer;position:relative;overflow:hidden;transition:transform .2s,box-shadow .2s;box-shadow:0 6px 20px rgba(79,142,255,0.4);margin-top:4px;}
+.btn-login::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,0.15) 0%,transparent 100%);pointer-events:none;}
+.btn-login:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(79,142,255,0.6);}
+.btn-login:active{transform:translateY(0);}
+.btn-login:disabled{opacity:.5;cursor:not-allowed;transform:none;}
+.err-box{background:rgba(255,51,85,0.08);border:1px solid rgba(255,51,85,0.25);border-radius:8px;padding:10px 14px;font-size:12px;color:#ff6680;margin-bottom:14px;display:none;text-align:center;animation:shake .4s ease;}
+.err-box.show{display:block;}
+@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}
+.spinner{display:none;width:16px;height:16px;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;margin:0 auto;}
+@keyframes spin{to{transform:rotate(360deg)}}
+.btn-login.loading .btn-text{display:none;}
+.btn-login.loading .spinner{display:block;}
+.foot{margin-top:18px;text-align:center;font-size:11px;color:var(--muted);}
+.foot a{color:var(--neon-blue);text-decoration:none;transition:color .2s;}
+.foot a:hover{color:var(--neon-cyan);}
+.exp-note{display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px;color:var(--muted);margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.06);}
+.exp-dot{width:6px;height:6px;border-radius:50%;background:var(--neon-green);box-shadow:0 0 8px var(--neon-green);animation:dotPulse 2s ease-in-out infinite;}
+@keyframes dotPulse{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes floatIn{from{opacity:0;transform:translateY(-20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes cardIn{from{opacity:0;transform:scale(0.92) translateY(20px)}to{opacity:1;transform:scale(1) translateY(0)}}
+</style>
+</head>
+<body>
+<video id="bg-video" autoplay loop muted playsinline>
+  <source src="bgvideo.mp4" type="video/mp4">
+</video>
+<div class="bg-overlay"></div>
+<canvas id="pc"></canvas>
+
+<div class="page">
+  <div class="brand">
+    <div class="brand-icon">⛏</div>
+    <h1>MC AFK MANAGER</h1>
+    <p>100-Slot Bot Control System</p>
+  </div>
+  <div class="card">
+    <div class="card-title">SECURE LOGIN</div>
+    <div class="err-box" id="err"></div>
+    <div class="field">
+      <label>Username</label>
+      <div class="input-wrap"><span class="ico">👤</span><input type="text" id="uname" placeholder="Enter username" autocomplete="username" autofocus></div>
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <div class="input-wrap"><span class="ico">🔒</span><input type="password" id="upass" placeholder="Enter password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()"></div>
+    </div>
+    <button class="btn-login" id="lbtn" onclick="doLogin()">
+      <span class="btn-text">LOGIN →</span>
+      <div class="spinner"></div>
+    </button>
+    <div class="exp-note"><div class="exp-dot"></div><span>Temporary accounts auto-expire after the granted time</span></div>
+  </div>
+  <div class="foot">Admin? &nbsp;<a href="admin.html">Open Admin Panel →</a></div>
+</div>
+
+<script>
+(function(){
+  const cv=document.getElementById('pc'),cx=cv.getContext('2d');let W,H;
+  const C=['#4f8eff','#9f6fff','#00ffaa','#00e5ff'];const pts=[];
+  function resize(){W=cv.width=innerWidth;H=cv.height=innerHeight;}
+  window.addEventListener('resize',resize);resize();
+  class P{reset(){this.x=Math.random()*W;this.y=Math.random()*H;this.vx=(Math.random()-.5)*.3;this.vy=-Math.random()*.4-.1;this.r=Math.random()*1.4+.3;this.a=Math.random();this.fade=Math.random()*.003+.001;this.c=C[Math.floor(Math.random()*C.length)];}constructor(){this.reset();}step(){this.x+=this.vx;this.y+=this.vy;this.a-=this.fade;if(this.a<=0||this.y<-5)this.reset();}draw(){cx.save();cx.globalAlpha=Math.max(0,this.a)*.65;cx.beginPath();cx.arc(this.x,this.y,this.r,0,Math.PI*2);cx.fillStyle=this.c;cx.shadowBlur=8;cx.shadowColor=this.c;cx.fill();cx.restore();}}
+  for(let i=0;i<60;i++)pts.push(new P());
+  function loop(){cx.clearRect(0,0,W,H);pts.forEach(p=>{p.step();p.draw();});requestAnimationFrame(loop);}loop();
+})();
+
+async function doLogin(){
+  const btn=document.getElementById('lbtn'),err=document.getElementById('err');
+  const user=document.getElementById('uname').value.trim(),pass=document.getElementById('upass').value;
+  err.classList.remove('show');
+  if(!user||!pass){showErr('Please enter username and password.');return;}
+  btn.classList.add('loading');btn.disabled=true;
+  try{
+    const res=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user,password:pass})});
+    const data=await res.json();
+    if(!res.ok||!data.success){showErr(data.error||'Invalid credentials. Try again.');return;}
+    localStorage.setItem('mc_token',data.token);localStorage.setItem('mc_user',data.username);localStorage.setItem('mc_type',data.type);localStorage.setItem('mc_exp',data.expiresAt);
+    document.cookie=`mc_token=${data.token}; path=/; max-age=${Math.floor((data.expiresAt-Date.now())/1000)}`;
+    window.location.href='index.html';
+  }catch(e){showErr('Connection error. Is the server running?');}
+  finally{btn.classList.remove('loading');btn.disabled=false;}
+}
+function showErr(msg){const e=document.getElementById('err');e.textContent='⚠ '+msg;e.classList.remove('show');void e.offsetWidth;e.classList.add('show');}
+(async()=>{const t=localStorage.getItem('mc_token');if(!t)return;try{const r=await fetch('/api/auth/verify',{headers:{'Authorization':'Bearer '+t}});if(r.ok)window.location.href='index.html';else localStorage.clear();}catch{}})();
+</script>
+</body>
+</html>
