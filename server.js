@@ -23,6 +23,34 @@ const DATA_FILE = path.join(__dirname, "bot-slots.json");
 const AUTH_FILE = path.join(__dirname, "auth-data.json");
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  PASSWORD ENCRYPTION (bot slot passwords)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const ENC_KEY = crypto.createHash("sha256")
+  .update(process.env.SESSION_SECRET || "mc-afk-enc-key-change-me")
+  .digest(); // 32 bytes for AES-256
+
+function encryptPass(text) {
+  if (!text) return null;
+  try {
+    const iv = crypto.randomBytes(16);
+    const c  = crypto.createCipheriv("aes-256-cbc", ENC_KEY, iv);
+    const enc = Buffer.concat([c.update(text, "utf8"), c.final()]);
+    return iv.toString("hex") + ":" + enc.toString("hex");
+  } catch { return null; }
+}
+
+function decryptPass(enc) {
+  if (!enc) return null;
+  if (!enc.includes(":")) return enc; // purana plain-text handle karo
+  try {
+    const [ivHex, encHex] = enc.split(":");
+    const d = crypto.createDecipheriv("aes-256-cbc", ENC_KEY, Buffer.from(ivHex, "hex"));
+    return Buffer.concat([d.update(Buffer.from(encHex, "hex")), d.final()]).toString("utf8");
+  } catch { return null; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  AUTH SYSTEM
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -68,6 +96,25 @@ function requireAdmin(req, res, next) {
   req.session = session; next();
 }
 
+// Temp user sirf apna assigned slot use kar sakta hai; admin sab kar sakta hai
+function requireSlotAccess(req, res, next) {
+  const session = getSession(req);
+  if (!session) { res.status(401).json({ error: "Not logged in" }); return; }
+  if (session.type === "admin") { req.session = session; next(); return; }
+  // Temp user — allowedSlot check
+  const d = loadAuthData();
+  const account = d.tempAccounts.find(a => a.id === session.tempAccountId && !a.revoked && a.expiresAt > Date.now());
+  if (!account) { res.status(403).json({ error: "Account expired or revoked" }); return; }
+  if (!account.allowedSlot) { res.status(403).json({ error: "No slot assigned to your account" }); return; }
+  // Agar route mein :id hai toh match karo
+  if (req.params.id && req.params.id !== String(account.allowedSlot)) {
+    res.status(403).json({ error: `Access denied — you can only use Slot ${account.allowedSlot}` }); return;
+  }
+  req.session = session;
+  req.allowedSlot = String(account.allowedSlot);
+  next();
+}
+
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────
 app.post("/api/auth/login", (req, res) => {
   const { username, password } = req.body;
@@ -100,7 +147,10 @@ app.post("/api/auth/login", (req, res) => {
 app.get("/api/auth/verify", (req, res) => {
   const session = getSession(req);
   if (!session) { res.status(401).json({ valid: false }); return; }
-  res.json({ valid: true, username: session.username, type: session.type, expiresAt: session.expiresAt });
+  // Temp user ka allowedSlot bhi return karo
+  const d = loadAuthData();
+  const acc = session.type === "temp" ? d.tempAccounts.find(a => a.id === session.tempAccountId) : null;
+  res.json({ valid: true, username: session.username, type: session.type, expiresAt: session.expiresAt, allowedSlot: acc?.allowedSlot || null });
 });
 
 // ─── POST /api/auth/logout ────────────────────────────────────────────────────
@@ -112,8 +162,11 @@ app.post("/api/auth/logout", (req, res) => {
 
 // ─── POST /api/admin/temp-accounts ───────────────────────────────────────────
 app.post("/api/admin/temp-accounts", requireAdmin, (req, res) => {
-  const { username, password, hours=0, minutes=0, seconds=0, label="" } = req.body;
+  const { username, password, hours=0, minutes=0, seconds=0, label="", allowedSlot=null } = req.body;
   if (!username || !password) { res.status(400).json({ error: "Username and password required" }); return; }
+  if (!allowedSlot) { res.status(400).json({ error: "Allowed slot number required" }); return; }
+  const slotNum = Number(allowedSlot);
+  if (!slotNum || slotNum < 1 || slotNum > MAX_SLOTS) { res.status(400).json({ error: `Slot must be between 1 and ${MAX_SLOTS}` }); return; }
   const totalMs = (Number(hours)*3600 + Number(minutes)*60 + Number(seconds)) * 1000;
   if (totalMs <= 0) { res.status(400).json({ error: "Duration must be > 0" }); return; }
 
@@ -127,6 +180,7 @@ app.post("/api/admin/temp-accounts", requireAdmin, (req, res) => {
     passwordHash: hashPassword(password),
     createdAt: now, expiresAt: now+totalMs,
     label: label||username, revoked: false,
+    allowedSlot: String(slotNum),
   };
   d.tempAccounts.push(account); saveAuthData(d);
   res.json({ success: true, account: sanitizeAccount(account) });
@@ -161,7 +215,7 @@ app.get("/api/admin/stats", requireAdmin, (_req, res) => {
 });
 
 function sanitizeAccount(a) {
-  return { id:a.id, username:a.username, label:a.label, createdAt:a.createdAt, expiresAt:a.expiresAt, revoked:a.revoked };
+  return { id:a.id, username:a.username, label:a.label, createdAt:a.createdAt, expiresAt:a.expiresAt, revoked:a.revoked, allowedSlot:a.allowedSlot||null };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -268,15 +322,18 @@ function createMineflayerBot(slotId, cfg) {
     state.reconnectAttempts=0; state.isReconnecting=false; emitStatus(slotId);
     emitLog(slotId,"[System]",`✅ Joined ${cfg.host}:${cfg.port||25565} as ${cfg.username}`);
     startAfk(state);
-    if(cfg.password) setTimeout(()=>{if(b!==state.bot)return;try{b.chat(`/login ${cfg.password}`);}catch{}},1_500);
+    // Decrypt password before sending to Minecraft
+    const rp = decryptPass(cfg.password);
+    if(rp) setTimeout(()=>{if(b!==state.bot)return;try{b.chat(`/login ${rp}`);}catch{}},1_500);
   });
   b.on("chat",(username,message)=>{if(b!==state.bot||username===b.username)return;emitLog(slotId,username,message);});
   b.on("message",(jsonMsg)=>{
     if(b!==state.bot) return;
     const raw=jsonMsg.toString(), lower=raw.toLowerCase();
-    if(cfg.password){
-      if(lower.includes("/register")||lower.includes("please register")||lower.includes("register with")){setTimeout(()=>{if(b!==state.bot)return;try{b.chat(`/register ${cfg.password} ${cfg.password}`);}catch{}},800);return;}
-      if(lower.includes("/login")||lower.includes("please login")||lower.includes("log in")){setTimeout(()=>{if(b!==state.bot)return;try{b.chat(`/login ${cfg.password}`);}catch{}},800);return;}
+    const rp = decryptPass(cfg.password);
+    if(rp){
+      if(lower.includes("/register")||lower.includes("please register")||lower.includes("register with")){setTimeout(()=>{if(b!==state.bot)return;try{b.chat(`/register ${rp} ${rp}`);}catch{}},800);return;}
+      if(lower.includes("/login")||lower.includes("please login")||lower.includes("log in")){setTimeout(()=>{if(b!==state.bot)return;try{b.chat(`/login ${rp}`);}catch{}},800);return;}
     }
     if(raw.trim()) emitLog(slotId,"[Server]",raw);
   });
@@ -316,8 +373,6 @@ function restartSlot(slotId) { stopSlot(slotId); setTimeout(()=>startSlot(slotId
 //  EXPRESS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-
 // Bot routes
 app.get("/api/slots", (_req, res) => {
   const result={};
@@ -334,7 +389,8 @@ app.post("/api/slot/:id/register",(req,res)=>{
   const{host,port,version,username,password}=req.body;
   if(!host||!username){res.status(400).json({error:"host and username required"});return;}
   const existing=getSlotData(id)??{};
-  setSlotData(id,{...existing,host,port:Number(port)||25565,version:version||"auto",username,password:password||null,registered:true});
+  // Encrypt password before saving to disk
+  setSlotData(id,{...existing,host,port:Number(port)||25565,version:version||"auto",username,password:encryptPass(password),registered:true});
   emitLog(id,"[System]",`📝 Slot ${id} registered: ${username} @ ${host}`);
   res.json({ok:true});
 });
@@ -351,8 +407,14 @@ app.delete("/api/slot/:id",(req,res)=>{
   const id=req.params.id; stopSlot(id); deleteSlotData(id);
   emitLog(id,"[System]",`🗑 Slot ${id} deleted.`); io.emit("slotDeleted",{slotId:id}); res.json({ok:true});
 });
-app.get("/api/slot/:id/settings",(req,res)=>res.json(getSlotData(req.params.id)??{}));
+// Settings API — password kabhi return nahi hoga
+app.get("/api/slot/:id/settings",(req,res)=>{
+  const d=getSlotData(req.params.id)??{};
+  const{password:_,...safe}=d; // password hata do
+  res.json(safe);
+});
 app.get("/api/healthz",(_req,res)=>res.json({status:"ok",activeBots:[...botStates.values()].filter(s=>s.bot?.entity).length}));
+app.get("/health",(_req,res)=>res.json({status:"ok",uptime:process.uptime(),activeBots:[...botStates.values()].filter(s=>s.bot?.entity).length}));
 
 // ─── Socket.IO ────────────────────────────────────────────────────────────────
 io.on("connection",(socket)=>{
@@ -369,12 +431,25 @@ for(const[id,data]of Object.entries(slotsData)){
   }
 }
 
-// ─── Self-ping keep-alive ─────────────────────────────────────────────────────
-const domains = process.env.RENDER_EXTERNAL_URL || process.env.REPLIT_DOMAINS;
-if (domains) {
-  const selfUrl = domains.startsWith("http") ? `${domains}/api/healthz` : `https://${domains.split(",")[0]}/api/healthz`;
-  setInterval(async()=>{try{await fetch(selfUrl);}catch{}}, 4*60_000);
-  console.log("[KeepAlive] Pinging:", selfUrl);
+// ─── Self-ping keep-alive (Render 24/7) ──────────────────────────────────────
+const pingTarget =
+  process.env.APP_URL ||                          // tumhara custom env var
+  process.env.RENDER_EXTERNAL_URL ||              // Render automatic
+  process.env.REPLIT_DOMAINS;                     // Replit automatic
+
+if (pingTarget) {
+  const base    = pingTarget.startsWith("http") ? pingTarget : `https://${pingTarget.split(",")[0]}`;
+  const selfUrl = `${base}/health`;
+  const interval= parseInt(process.env.PING_INTERVAL_MS) || 4 * 60_000; // default 4 min
+  setInterval(async()=>{
+    try{
+      await fetch(selfUrl);
+      console.log(`[KeepAlive] ✅ Ping OK — ${new Date().toLocaleTimeString()}`);
+    }catch(e){
+      console.warn(`[KeepAlive] ⚠️ Ping failed: ${e.message}`);
+    }
+  }, interval);
+  console.log(`[KeepAlive] 🚀 Self-ping started → ${selfUrl} every ${interval/1000}s`);
 }
 
 httpServer.listen(PORT, ()=>console.log(`[Server] Running on port ${PORT}`));
