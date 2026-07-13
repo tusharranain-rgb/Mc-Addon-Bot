@@ -27,7 +27,9 @@ canvas{position:fixed;inset:0;z-index:2;pointer-events:none;}
 .bsm.grey:hover{background:rgba(255,51,85,0.1);border-color:rgba(255,51,85,0.3);color:var(--nr);}
 .bsm.blue{background:rgba(79,142,255,0.1);border:1px solid rgba(79,142,255,0.25);color:var(--nb);}
 .bsm.blue:hover{background:rgba(79,142,255,0.2);}
-.content{flex:1;padding:20px;max-width:1050px;width:100%;margin:0 auto;display:flex;flex-direction:column;gap:18px;}
+.bsm.purple{background:rgba(159,111,255,0.1);border:1px solid rgba(159,111,255,0.25);color:var(--np);}
+.bsm.purple:hover{background:rgba(159,111,255,0.2);}
+.content{flex:1;padding:20px;max-width:1150px;width:100%;margin:0 auto;display:flex;flex-direction:column;gap:18px;}
 .stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
 .sc{background:var(--card);border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:14px 18px;backdrop-filter:blur(20px);position:relative;overflow:hidden;animation:cIn .4s cubic-bezier(.34,1.56,.64,1) both;}
 .sc::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;border-radius:2px 2px 0 0;}
@@ -46,15 +48,22 @@ canvas{position:fixed;inset:0;z-index:2;pointer-events:none;}
 @media(max-width:700px){.grid2{grid-template-columns:1fr;}.stats-grid{grid-template-columns:1fr 1fr;}}
 .card{background:var(--card);border:1px solid rgba(255,255,255,0.07);border-radius:14px;padding:18px;backdrop-filter:blur(20px);position:relative;overflow:hidden;animation:cIn .45s cubic-bezier(.34,1.56,.64,1) .05s both;}
 .card::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(79,142,255,0.4),transparent);}
+.card.pw-card::before{background:linear-gradient(90deg,transparent,rgba(255,204,0,0.5),transparent);}
 .ch{display:flex;align-items:center;gap:8px;margin-bottom:16px;}
 .ch h2{font-family:'Orbitron',monospace;font-size:11px;font-weight:700;letter-spacing:2px;color:var(--nb);}
 .ch h2::before{content:'';display:inline-block;width:3px;height:11px;background:linear-gradient(180deg,var(--nb),var(--np));border-radius:2px;margin-right:7px;vertical-align:middle;}
+.ch h2.yellow{color:var(--ny);}
+.ch h2.yellow::before{background:linear-gradient(180deg,var(--ny),var(--nr));}
 .ch .cr{margin-left:auto;}
 .field{margin-bottom:13px;}
 .field label{display:block;font-family:'Orbitron',monospace;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:5px;}
-.field input{width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);border-radius:9px;padding:9px 12px;color:var(--text);font-size:13px;font-family:'Inter',sans-serif;outline:none;transition:border-color .25s,box-shadow .25s;}
-.field input:focus{border-color:var(--nb);box-shadow:0 0 0 3px rgba(79,142,255,0.14);}
+.field input,.field select{width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);border-radius:9px;padding:9px 12px;color:var(--text);font-size:13px;font-family:'Inter',sans-serif;outline:none;transition:border-color .25s,box-shadow .25s;}
+.field input:focus,.field select:focus{border-color:var(--nb);box-shadow:0 0 0 3px rgba(79,142,255,0.14);}
 .field input::placeholder{color:var(--muted);}
+.field select{background:rgba(10,10,25,0.9);cursor:pointer;}
+.field select option{background:#0a0a19;}
+.slot-hint{font-size:10px;color:var(--muted);margin-top:4px;}
+.slot-hint span{color:var(--ng);}
 .dur-row{display:flex;gap:7px;align-items:flex-end;}
 .dur-item{flex:1;text-align:center;}
 .dur-item label{display:block;font-size:9px;color:var(--muted);font-family:'Orbitron',monospace;letter-spacing:1px;margin-bottom:4px;text-transform:uppercase;}
@@ -69,6 +78,8 @@ canvas{position:fixed;inset:0;z-index:2;pointer-events:none;}
 .bb{background:linear-gradient(135deg,#3a6fcc,#4f8eff);color:#fff;box-shadow:0 4px 15px rgba(79,142,255,0.35);}
 .bb:hover{box-shadow:0 6px 22px rgba(79,142,255,0.55);}
 .br{background:linear-gradient(135deg,#cc2244,#ff3355);color:#fff;box-shadow:0 4px 15px rgba(255,51,85,0.3);}
+.by{background:linear-gradient(135deg,#b8860b,#ffcc00);color:#000;box-shadow:0 4px 15px rgba(255,204,0,0.3);}
+.by:hover{box-shadow:0 6px 22px rgba(255,204,0,0.5);}
 .bg2{background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.08);color:var(--muted);}
 .bg2:hover{background:rgba(255,255,255,0.12);color:var(--text);}
 .bfull{width:100%;padding:11px;}
@@ -102,6 +113,7 @@ canvas{position:fixed;inset:0;z-index:2;pointer-events:none;}
 .acc-info{flex:1;min-width:0;}
 .acc-name{font-size:12px;font-weight:600;color:var(--text);}
 .acc-lbl{font-size:10px;color:var(--muted);margin-top:1px;}
+.slot-badge{font-family:'JetBrains Mono',monospace;font-size:10px;padding:2px 8px;border-radius:5px;background:rgba(79,142,255,0.1);border:1px solid rgba(79,142,255,0.25);color:var(--nb);white-space:nowrap;flex-shrink:0;}
 .cd{font-family:'JetBrains Mono',monospace;font-size:10px;padding:2px 7px;border-radius:5px;white-space:nowrap;}
 .cd.ok{background:rgba(0,255,170,0.08);border:1px solid rgba(0,255,170,0.2);color:var(--ng);}
 .cd.warn{background:rgba(255,204,0,0.08);border:1px solid rgba(255,204,0,0.25);color:var(--ny);}
@@ -109,6 +121,33 @@ canvas{position:fixed;inset:0;z-index:2;pointer-events:none;}
 .rvbtn{border:none;background:rgba(255,51,85,0.1);border:1px solid rgba(255,51,85,0.2);color:var(--nr);border-radius:7px;padding:4px 9px;font-size:10px;cursor:pointer;flex-shrink:0;transition:all .2s;}
 .rvbtn:hover{background:rgba(255,51,85,0.2);}
 .empty{text-align:center;padding:28px 0;color:var(--muted);font-size:12px;}
+
+/* Password Panel */
+.pw-search-row{display:flex;gap:8px;margin-bottom:12px;}
+.pw-search-row input{flex:1;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);border-radius:8px;padding:8px 12px;color:var(--text);font-size:12px;font-family:'Inter',sans-serif;outline:none;transition:border-color .25s;}
+.pw-search-row input:focus{border-color:var(--ny);}
+.pw-list{display:flex;flex-direction:column;gap:6px;max-height:400px;overflow-y:auto;padding-right:3px;}
+.pw-list::-webkit-scrollbar{width:3px;}
+.pw-list::-webkit-scrollbar-thumb{background:var(--ny);border-radius:2px;}
+.pw-item{background:rgba(255,204,0,0.04);border:1px solid rgba(255,204,0,0.12);border-radius:9px;padding:10px 13px;display:flex;align-items:center;gap:10px;transition:border-color .2s;}
+.pw-item:hover{border-color:rgba(255,204,0,0.3);}
+.pw-item.revoked{opacity:.4;}
+.pw-info{flex:1;min-width:0;}
+.pw-user{font-size:12px;font-weight:600;color:var(--text);}
+.pw-slot{font-size:10px;color:var(--muted);margin-top:2px;}
+.pw-pass{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--ny);flex-shrink:0;background:rgba(255,204,0,0.08);border:1px solid rgba(255,204,0,0.2);border-radius:6px;padding:3px 10px;}
+.pw-copy{border:none;background:rgba(255,204,0,0.08);border:1px solid rgba(255,204,0,0.2);color:var(--ny);border-radius:5px;padding:3px 8px;font-size:10px;cursor:pointer;transition:all .2s;flex-shrink:0;}
+.pw-copy:hover{background:rgba(255,204,0,0.2);}
+
+/* Bot Password Panel */
+.bot-pw-row{display:flex;gap:8px;margin-bottom:12px;align-items:flex-end;}
+.bot-pw-row .field{flex:1;margin-bottom:0;}
+.bot-pw-result{background:rgba(0,229,255,0.05);border:1px solid rgba(0,229,255,0.2);border-radius:9px;padding:12px 14px;margin-top:10px;display:none;}
+.bot-pw-result.show{display:block;animation:fIn .3s ease;}
+.bot-pw-result .bpr-row{display:flex;align-items:center;gap:8px;margin-bottom:5px;}
+.bot-pw-result .bpr-label{font-size:10px;color:var(--muted);width:70px;flex-shrink:0;}
+.bot-pw-result .bpr-val{font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:var(--nc);flex:1;}
+
 .toast{position:fixed;bottom:20px;right:20px;z-index:9999;background:rgba(10,10,25,0.95);border:1px solid rgba(79,142,255,0.2);border-left:3px solid var(--ng);border-radius:10px;padding:11px 16px;font-size:13px;color:var(--text);backdrop-filter:blur(16px);box-shadow:0 8px 30px rgba(0,0,0,.5);transition:all .35s cubic-bezier(.34,1.56,.64,1);opacity:1;}
 .toast.e{border-left-color:var(--nr);}
 .toast.hide{opacity:0;transform:translateY(10px);pointer-events:none;}
@@ -133,6 +172,7 @@ canvas{position:fixed;inset:0;z-index:2;pointer-events:none;}
   </div>
 
   <div class="content">
+    <!-- Stats -->
     <div class="stats-grid">
       <div class="sc g" style="animation-delay:.0s"><div class="sc-lbl">Active Accounts</div><div class="sc-val" id="st-a">—</div><div class="sc-sub">Currently valid</div></div>
       <div class="sc b" style="animation-delay:.05s"><div class="sc-lbl">Total Created</div><div class="sc-val" id="st-t">—</div><div class="sc-sub">All time</div></div>
@@ -141,14 +181,23 @@ canvas{position:fixed;inset:0;z-index:2;pointer-events:none;}
     </div>
 
     <div class="grid2">
-      <!-- Create Form -->
+      <!-- ── Create Form ── -->
       <div class="card">
         <div class="ch"><h2>Create Temp Account</h2></div>
         <div class="msg e" id="ferr"></div>
         <div class="msg ok" id="fok"></div>
+
         <div class="field"><label>Username</label><input type="text" id="fu" placeholder="e.g. player123"></div>
         <div class="field"><label>Password</label><input type="password" id="fp" placeholder="Temp password"></div>
         <div class="field"><label>Label (optional)</label><input type="text" id="fl" placeholder="e.g. My Friend…"></div>
+
+        <!-- ★ FIXED: Slot Number field add kiya ★ -->
+        <div class="field">
+          <label>⚡ Allowed Slot Number <span style="color:var(--nr)">*</span></label>
+          <input type="number" id="fslot" min="1" max="100" placeholder="1 – 100 (e.g. 5)" style="border-color:rgba(0,229,255,0.3);">
+          <div class="slot-hint">Is user ko sirf <span id="slot-preview">yeh</span> slot milega</div>
+        </div>
+
         <div class="field">
           <label>Access Duration</label>
           <div class="dur-row">
@@ -176,15 +225,55 @@ canvas{position:fixed;inset:0;z-index:2;pointer-events:none;}
           <h4>✅ ACCOUNT CREATED — SHARE THESE CREDENTIALS</h4>
           <div class="creds-row"><div class="creds-key">Username</div><div class="creds-val" id="cu">—</div><button class="copy-btn" onclick="copyVal('cu')">Copy</button></div>
           <div class="creds-row"><div class="creds-key">Password</div><div class="creds-val" id="cp">—</div><button class="copy-btn" onclick="copyVal('cp')">Copy</button></div>
+          <div class="creds-row"><div class="creds-key">Slot</div><div class="creds-val" id="cs" style="color:var(--nc)">—</div></div>
           <div class="creds-exp" id="ce">Expires: —</div>
         </div>
       </div>
 
-      <!-- Accounts List -->
+      <!-- ── Accounts List ── -->
       <div class="card">
         <div class="ch"><h2>Temp Accounts</h2><div class="cr"><button class="bsm grey" onclick="loadAccs()">🔄 Refresh</button></div></div>
         <div class="acc-list" id="alist"><div class="empty">Loading…</div></div>
       </div>
+    </div>
+
+    <!-- ── Password Panels ── -->
+    <div class="grid2">
+
+      <!-- ★ FIXED: Temp Account Passwords (admin-only) ★ -->
+      <div class="card pw-card">
+        <div class="ch">
+          <h2 class="yellow">🔑 Temp Account Passwords</h2>
+          <div class="cr"><button class="bsm purple" onclick="loadPasswords()">👁 Load Passwords</button></div>
+        </div>
+        <div class="pw-search-row">
+          <input type="text" id="pw-search" placeholder="🔍 Username ya slot se filter karo..." oninput="filterPasswords(this.value)" disabled>
+        </div>
+        <div class="pw-list" id="pw-list"><div class="empty">"Load Passwords" button dabao</div></div>
+      </div>
+
+      <!-- ★ FIXED: Bot Slot Password Dekho ★ -->
+      <div class="card pw-card">
+        <div class="ch"><h2 class="yellow">🔐 Bot Slot Password</h2></div>
+        <p style="font-size:11px;color:var(--muted);margin-bottom:14px;">Kisi bhi bot slot ka Minecraft password dekho (sirf admin)</p>
+        <div class="bot-pw-row">
+          <div class="field">
+            <label>Slot Number (1–100)</label>
+            <input type="number" id="bpw-slot" min="1" max="100" placeholder="e.g. 7">
+          </div>
+          <button class="btn by" style="padding:9px 16px;height:38px;flex-shrink:0;" onclick="fetchBotPassword()">🔍 Dekho</button>
+        </div>
+        <div class="bot-pw-result" id="bpw-result">
+          <div class="bpr-row"><div class="bpr-label">Slot</div><div class="bpr-val" id="bpw-slotval">—</div></div>
+          <div class="bpr-row"><div class="bpr-label">Username</div><div class="bpr-val" id="bpw-user">—</div></div>
+          <div class="bpr-row">
+            <div class="bpr-label">Password</div>
+            <div class="bpr-val" id="bpw-pass">—</div>
+            <button class="copy-btn" onclick="copyText(document.getElementById('bpw-pass').textContent)">Copy</button>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 </div>
@@ -193,8 +282,19 @@ canvas{position:fixed;inset:0;z-index:2;pointer-events:none;}
 <script>
 (function(){const cv=document.getElementById('pc'),cx=cv.getContext('2d');let W,H;const C=['#4f8eff','#9f6fff','#00ffaa'];const pts=[];function resize(){W=cv.width=innerWidth;H=cv.height=innerHeight;}window.addEventListener('resize',resize);resize();class P{reset(){this.x=Math.random()*W;this.y=Math.random()*H;this.vx=(Math.random()-.5)*.25;this.vy=-Math.random()*.35-.05;this.r=Math.random()*1.2+.3;this.a=Math.random();this.fade=Math.random()*.002+.001;this.c=C[Math.floor(Math.random()*C.length)];}constructor(){this.reset();}step(){this.x+=this.vx;this.y+=this.vy;this.a-=this.fade;if(this.a<=0||this.y<-5)this.reset();}draw(){cx.save();cx.globalAlpha=Math.max(0,this.a)*.5;cx.beginPath();cx.arc(this.x,this.y,this.r,0,Math.PI*2);cx.fillStyle=this.c;cx.shadowBlur=6;cx.shadowColor=this.c;cx.fill();cx.restore();}}for(let i=0;i<45;i++)pts.push(new P());function loop(){cx.clearRect(0,0,W,H);pts.forEach(p=>{p.step();p.draw();});requestAnimationFrame(loop);}loop();})();
 
-let token=localStorage.getItem('mc_token')||'',accs=[];
-(async()=>{if(!token){location.href='login.html';return;}try{const r=await api('/api/auth/verify');if(!r.valid||r.type!=='admin'){location.href='login.html';return;}document.getElementById('adm-name').textContent=r.username||'admin';}catch{location.href='login.html';}loadStats();loadAccs();setInterval(loadStats,15000);setInterval(refreshCDs,1000);})();
+let token=localStorage.getItem('mc_token')||'',accs=[],allPasswords=[];
+
+// Slot preview update
+document.getElementById('fslot').addEventListener('input',function(){
+  const v=this.value;document.getElementById('slot-preview').textContent=v?`Slot #${v}`:'yeh';
+});
+
+(async()=>{
+  if(!token){location.href='login.html';return;}
+  try{const r=await api('/api/auth/verify');if(!r.valid||r.type!=='admin'){location.href='login.html';return;}document.getElementById('adm-name').textContent=r.username||'admin';}
+  catch{location.href='login.html';}
+  loadStats();loadAccs();setInterval(loadStats,15000);setInterval(refreshCDs,1000);
+})();
 
 async function api(url,method='GET',body=null){const o={method,headers:{'Authorization':'Bearer '+token}};if(body){o.headers['Content-Type']='application/json';o.body=JSON.stringify(body);}const r=await fetch(url,o);const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||`HTTP ${r.status}`);return d;}
 
@@ -202,24 +302,55 @@ async function loadStats(){try{const d=await api('/api/admin/stats');document.ge
 
 async function loadAccs(){try{const d=await api('/api/admin/temp-accounts');accs=d.accounts||[];renderAccs();}catch(e){showToast(e.message||'Failed',true);}}
 
-function renderAccs(){const el=document.getElementById('alist');if(!accs.length){el.innerHTML='<div class="empty">No temp accounts yet.<br>Create one using the form.</div>';return;}const now=Date.now();const sorted=[...accs].sort((a,b)=>{const aa=!a.revoked&&a.expiresAt>now,ba=!b.revoked&&b.expiresAt>now;if(aa&&!ba)return -1;if(!aa&&ba)return 1;return b.expiresAt-a.expiresAt;});el.innerHTML=sorted.map(a=>{const active=!a.revoked&&a.expiresAt>now,rev=a.revoked;const dc=rev?'revoked':active?'active':'expired';const ic=rev?'revoked':active?'':'expired';const ms=a.expiresAt-now;const cdCls=active?(ms<3600000?'warn':'ok'):'dead';const cdTxt=rev?'Revoked':active?fmtCD(ms):'Expired';const cr=new Date(a.createdAt).toLocaleDateString('en-IN',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});return`<div class="acc-item ${ic}" data-id="${a.id}" data-exp="${a.expiresAt}"><div class="acc-dot ${dc}"></div><div class="acc-info"><div class="acc-name">${esc(a.username)}${a.label&&a.label!==a.username?` <span style="font-size:10px;color:var(--muted)">(${esc(a.label)})</span>`:''}</div><div class="acc-lbl">Created: ${cr}</div></div>${active?`<div class="cd ${cdCls}" data-id="${a.id}" data-exp="${a.expiresAt}">${cdTxt}</div>`:`<div class="cd ${cdCls}">${cdTxt}</div>`}${!rev&&active?`<button class="rvbtn" onclick="revokeAcc('${a.id}')">✕ Revoke</button>`:''}</div>`;}).join('');}
+function renderAccs(){
+  const el=document.getElementById('alist');
+  if(!accs.length){el.innerHTML='<div class="empty">No temp accounts yet.<br>Create one using the form.</div>';return;}
+  const now=Date.now();
+  const sorted=[...accs].sort((a,b)=>{const aa=!a.revoked&&a.expiresAt>now,ba=!b.revoked&&b.expiresAt>now;if(aa&&!ba)return -1;if(!aa&&ba)return 1;return b.expiresAt-a.expiresAt;});
+  el.innerHTML=sorted.map(a=>{
+    const active=!a.revoked&&a.expiresAt>now,rev=a.revoked;
+    const dc=rev?'revoked':active?'active':'expired';
+    const ic=rev?'revoked':active?'':'expired';
+    const ms=a.expiresAt-now;
+    const cdCls=active?(ms<3600000?'warn':'ok'):'dead';
+    const cdTxt=rev?'Revoked':active?fmtCD(ms):'Expired';
+    const cr=new Date(a.createdAt).toLocaleDateString('en-IN',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+    const slotDisp=a.allowedSlot?`Slot #${a.allowedSlot}`:'No Slot';
+    return`<div class="acc-item ${ic}" data-id="${a.id}" data-exp="${a.expiresAt}">
+      <div class="acc-dot ${dc}"></div>
+      <div class="acc-info">
+        <div class="acc-name">${esc(a.username)}${a.label&&a.label!==a.username?` <span style="font-size:10px;color:var(--muted)">(${esc(a.label)})</span>`:''}</div>
+        <div class="acc-lbl">Created: ${cr}</div>
+      </div>
+      <div class="slot-badge">${slotDisp}</div>
+      ${active?`<div class="cd ${cdCls}" data-id="${a.id}" data-exp="${a.expiresAt}">${cdTxt}</div>`:`<div class="cd ${cdCls}">${cdTxt}</div>`}
+      ${!rev&&active?`<button class="rvbtn" onclick="revokeAcc('${a.id}')">✕ Revoke</button>`:''}
+    </div>`;
+  }).join('');
+}
 
 function refreshCDs(){const now=Date.now();document.querySelectorAll('.cd[data-exp]').forEach(el=>{const exp=Number(el.dataset.exp);if(exp<=now){el.textContent='Expired';el.className='cd dead';return;}const ms=exp-now;el.textContent=fmtCD(ms);el.className='cd'+(ms<3600000?' warn':' ok');});}
 function fmtCD(ms){if(ms<=0)return'Expired';const t=Math.floor(ms/1000),h=Math.floor(t/3600),m=Math.floor((t%3600)/60),s=t%60;if(h>0)return`${h}h ${String(m).padStart(2,'0')}m ${String(s).padStart(2,'0')}s`;if(m>0)return`${m}m ${String(s).padStart(2,'0')}s`;return`${s}s`;}
 
+// ★ FIXED: allowedSlot field bhi bheja ★
 async function createAcc(){
   const btn=document.getElementById('cbtn'),fe=document.getElementById('ferr'),cbox=document.getElementById('cbox');
   fe.classList.remove('show');cbox.classList.remove('show');
-  const u=v('fu'),p=v('fp'),l=v('fl'),h=Number(v('fh'))||0,m=Number(v('fm'))||0,s=Number(v('fs'))||0;
-  if(!u||!p){showFerr('Username and Password required.');return;}
+  const u=v('fu'),p=v('fp'),l=v('fl'),slot=v('fslot');
+  const h=Number(v('fh'))||0,m=Number(v('fm'))||0,s=Number(v('fs'))||0;
+  if(!u||!p){showFerr('Username aur Password required hai.');return;}
+  if(!slot||Number(slot)<1||Number(slot)>100){showFerr('Slot number 1 se 100 ke beech hona chahiye.');return;}
   if(h===0&&m===0&&s===0){showFerr('Duration must be > 0.');return;}
   const ot=btn.textContent;btn.textContent='⏳ Creating…';btn.disabled=true;
   try{
-    const d=await api('/api/admin/temp-accounts','POST',{username:u,password:p,label:l,hours:h,minutes:m,seconds:s});
-    document.getElementById('cu').textContent=u;document.getElementById('cp').textContent=p;
+    const d=await api('/api/admin/temp-accounts','POST',{username:u,password:p,label:l,hours:h,minutes:m,seconds:s,allowedSlot:Number(slot)});
+    document.getElementById('cu').textContent=u;
+    document.getElementById('cp').textContent=p;
+    document.getElementById('cs').textContent=`Slot #${slot}`;
     document.getElementById('ce').textContent='Expires: '+new Date(d.account.expiresAt).toLocaleString('en-IN',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
     cbox.classList.add('show');
-    document.getElementById('fu').value='';document.getElementById('fp').value='';document.getElementById('fl').value='';
+    document.getElementById('fu').value='';document.getElementById('fp').value='';document.getElementById('fl').value='';document.getElementById('fslot').value='';
+    document.getElementById('slot-preview').textContent='yeh';
     showToast('✅ Account created!');loadAccs();loadStats();
   }catch(e){showFerr(e.message||'Failed');}
   finally{btn.textContent=ot;btn.disabled=false;}
@@ -227,10 +358,58 @@ async function createAcc(){
 
 async function revokeAcc(id){if(!confirm('Revoke this account? The user will be logged out immediately.'))return;try{await api('/api/admin/temp-accounts/'+id,'DELETE');showToast('Account revoked.');loadAccs();loadStats();}catch(e){showToast(e.message||'Failed',true);}}
 
-async function doLogout(){try{await api('/api/auth/logout','POST');}catch{}localStorage.clear();document.cookie='mc_token=; path=/; max-age=0';location.href='login.html';}
+// ★ NEW: Temp Account Passwords load karo ★
+async function loadPasswords(){
+  const list=document.getElementById('pw-list'),srch=document.getElementById('pw-search');
+  list.innerHTML='<div class="empty">Loading...</div>';
+  try{
+    const d=await api('/api/admin/temp-accounts/passwords');
+    allPasswords=d.accounts||[];
+    srch.disabled=false;
+    renderPasswords(allPasswords);
+    showToast(`✅ ${allPasswords.length} accounts loaded`);
+  }catch(e){list.innerHTML='<div class="empty">Failed to load</div>';showToast(e.message||'Failed',true);}
+}
+function renderPasswords(list){
+  const el=document.getElementById('pw-list');
+  if(!list.length){el.innerHTML='<div class="empty">Koi account nahi mila</div>';return;}
+  const now=Date.now();
+  el.innerHTML=list.map(a=>{
+    const active=!a.revoked&&a.expiresAt>now;
+    return`<div class="pw-item ${a.revoked?'revoked':''}">
+      <div class="pw-info">
+        <div class="pw-user">${esc(a.username)} ${!active?'<span style="font-size:9px;color:var(--nr)">(expired/revoked)</span>':''}</div>
+        <div class="pw-slot">Slot #${a.allowedSlot||'?'}</div>
+      </div>
+      <div class="pw-pass">${esc(a.plainPassword)}</div>
+      <button class="pw-copy" onclick="copyText('${esc(a.plainPassword)}')">Copy</button>
+    </div>`;
+  }).join('');
+}
+function filterPasswords(q){
+  if(!q.trim()){renderPasswords(allPasswords);return;}
+  const lower=q.toLowerCase();
+  renderPasswords(allPasswords.filter(a=>a.username.toLowerCase().includes(lower)||String(a.allowedSlot).includes(lower)||(a.label||'').toLowerCase().includes(lower)));
+}
 
+// ★ NEW: Bot slot ka Minecraft password dekho ★
+async function fetchBotPassword(){
+  const slot=document.getElementById('bpw-slot').value.trim();
+  if(!slot||Number(slot)<1||Number(slot)>100){showToast('Valid slot number enter karo (1-100)',true);return;}
+  const res=document.getElementById('bpw-result');res.classList.remove('show');
+  try{
+    const d=await api(`/api/admin/slot/${slot}/password`);
+    document.getElementById('bpw-slotval').textContent='Slot #'+d.slotId;
+    document.getElementById('bpw-user').textContent=d.username||'—';
+    document.getElementById('bpw-pass').textContent=d.password||'(no password)';
+    res.classList.add('show');
+  }catch(e){showToast(e.message||'Failed',true);}
+}
+
+async function doLogout(){try{await api('/api/auth/logout','POST');}catch{}localStorage.clear();document.cookie='mc_token=; path=/; max-age=0';location.href='login.html';}
 function setD(h,m,s){document.getElementById('fh').value=h;document.getElementById('fm').value=m;document.getElementById('fs').value=s;}
-function copyVal(id){navigator.clipboard.writeText(document.getElementById(id).textContent).then(()=>showToast('Copied!')).catch(()=>{});}
+function copyVal(id){copyText(document.getElementById(id).textContent);}
+function copyText(txt){navigator.clipboard.writeText(txt).then(()=>showToast('✅ Copied!')).catch(()=>{});}
 function showFerr(msg){const e=document.getElementById('ferr');e.textContent='⚠ '+msg;e.classList.add('show');}
 function v(id){const e=document.getElementById(id);return e?e.value.trim():'';}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
