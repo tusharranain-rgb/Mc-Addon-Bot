@@ -13,6 +13,10 @@ const app        = express();
 const httpServer = createServer(app);
 const io         = new Server(httpServer, { cors: { origin: "*" } });
 
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, "public")));
+
 const PORT      = process.env.PORT || 3000;
 const MAX_SLOTS = 100;
 const DATA_FILE = path.join(__dirname, "bot-slots.json");
@@ -22,8 +26,8 @@ const AUTH_FILE = path.join(__dirname, "auth-data.json");
 //  AUTH SYSTEM
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin@MC2024";
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "kaiser";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin@kaiser";
 
 function hashPassword(pw) {
   return crypto.createHash("sha256").update(pw + "mc-afk-salt-2024").digest("hex");
@@ -312,9 +316,7 @@ function restartSlot(slotId) { stopSlot(slotId); setTimeout(()=>startSlot(slotId
 //  EXPRESS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(express.static(path.join(__dirname, "public")));
+
 
 // Bot routes
 app.get("/api/slots", (_req, res) => {
