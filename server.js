@@ -22,13 +22,9 @@ const MAX_SLOTS = 100;
 const DATA_FILE = path.join(__dirname, "bot-slots.json");
 const AUTH_FILE = path.join(__dirname, "auth-data.json");
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  PASSWORD ENCRYPTION (bot slot passwords)
-// ═══════════════════════════════════════════════════════════════════════════════
-
 const ENC_KEY = crypto.createHash("sha256")
   .update(process.env.SESSION_SECRET || "mc-afk-enc-key-change-me")
-  .digest(); // 32 bytes for AES-256
+  .digest();
 
 function encryptPass(text) {
   if (!text) return null;
@@ -42,17 +38,13 @@ function encryptPass(text) {
 
 function decryptPass(enc) {
   if (!enc) return null;
-  if (!enc.includes(":")) return enc; // purana plain-text handle karo
+  if (!enc.includes(":")) return enc;
   try {
     const [ivHex, encHex] = enc.split(":");
     const d = crypto.createDecipheriv("aes-256-cbc", ENC_KEY, Buffer.from(ivHex, "hex"));
     return Buffer.concat([d.update(Buffer.from(encHex, "hex")), d.final()]).toString("utf8");
   } catch { return null; }
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  AUTH SYSTEM
-// ═══════════════════════════════════════════════════════════════════════════════
 
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "kaiser";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin@kaiser";
@@ -96,17 +88,14 @@ function requireAdmin(req, res, next) {
   req.session = session; next();
 }
 
-// Temp user sirf apna assigned slot use kar sakta hai; admin sab kar sakta hai
 function requireSlotAccess(req, res, next) {
   const session = getSession(req);
   if (!session) { res.status(401).json({ error: "Not logged in" }); return; }
   if (session.type === "admin") { req.session = session; next(); return; }
-  // Temp user — allowedSlot check
   const d = loadAuthData();
   const account = d.tempAccounts.find(a => a.id === session.tempAccountId && !a.revoked && a.expiresAt > Date.now());
   if (!account) { res.status(403).json({ error: "Account expired or revoked" }); return; }
   if (!account.allowedSlot) { res.status(403).json({ error: "No slot assigned to your account" }); return; }
-  // Agar route mein :id hai toh match karo
   if (req.params.id && req.params.id !== String(account.allowedSlot)) {
     res.status(403).json({ error: `Access denied — you can only use Slot ${account.allowedSlot}` }); return;
   }
@@ -115,14 +104,11 @@ function requireSlotAccess(req, res, next) {
   next();
 }
 
-// ─── POST /api/auth/login ─────────────────────────────────────────────────────
 app.post("/api/auth/login", (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) { res.status(400).json({ error: "Username and password required" }); return; }
   const d    = purgeAuthData(loadAuthData());
   const hash = hashPassword(password);
-
-  // Admin check
   if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
     const token   = generateToken();
     const session = { token, username, type: "admin", expiresAt: Date.now() + 365*24*3600*1000 };
@@ -130,37 +116,30 @@ app.post("/api/auth/login", (req, res) => {
     res.json({ success: true, token, type: "admin", expiresAt: session.expiresAt, username });
     return;
   }
-
-  // Temp account check
   const account = d.tempAccounts.find(
     a => a.username === username && a.passwordHash === hash && !a.revoked && a.expiresAt > Date.now()
   );
   if (!account) { res.status(401).json({ error: "Invalid credentials or account expired" }); return; }
-
   const token   = generateToken();
   const session = { token, username, type: "temp", expiresAt: account.expiresAt, tempAccountId: account.id };
   d.sessions.push(session); saveAuthData(d);
   res.json({ success: true, token, type: "temp", expiresAt: account.expiresAt, username, allowedSlot: account.allowedSlot });
 });
 
-// ─── GET /api/auth/verify ─────────────────────────────────────────────────────
 app.get("/api/auth/verify", (req, res) => {
   const session = getSession(req);
   if (!session) { res.status(401).json({ valid: false }); return; }
-  // Temp user ka allowedSlot bhi return karo
   const d = loadAuthData();
   const acc = session.type === "temp" ? d.tempAccounts.find(a => a.id === session.tempAccountId) : null;
   res.json({ valid: true, username: session.username, type: session.type, expiresAt: session.expiresAt, allowedSlot: acc?.allowedSlot || null });
 });
 
-// ─── POST /api/auth/logout ────────────────────────────────────────────────────
 app.post("/api/auth/logout", (req, res) => {
   const token = extractToken(req);
   if (token) { const d=loadAuthData(); d.sessions=d.sessions.filter(s=>s.token!==token); saveAuthData(d); }
   res.json({ success: true });
 });
 
-// ─── POST /api/admin/temp-accounts ───────────────────────────────────────────
 app.post("/api/admin/temp-accounts", requireAdmin, (req, res) => {
   const { username, password, hours=0, minutes=0, seconds=0, label="", allowedSlot=null } = req.body;
   if (!username || !password) { res.status(400).json({ error: "Username and password required" }); return; }
@@ -169,16 +148,14 @@ app.post("/api/admin/temp-accounts", requireAdmin, (req, res) => {
   if (!slotNum || slotNum < 1 || slotNum > MAX_SLOTS) { res.status(400).json({ error: `Slot must be between 1 and ${MAX_SLOTS}` }); return; }
   const totalMs = (Number(hours)*3600 + Number(minutes)*60 + Number(seconds)) * 1000;
   if (totalMs <= 0) { res.status(400).json({ error: "Duration must be > 0" }); return; }
-
   const d   = loadAuthData();
   const now = Date.now();
   const existing = d.tempAccounts.find(a => a.username===username && !a.revoked && a.expiresAt>now);
   if (existing) { res.status(409).json({ error: "Username already in use" }); return; }
-
   const account = {
     id: crypto.randomUUID(), username,
     passwordHash: hashPassword(password),
-    plainPassword: password,   // ← Admin ke liye stored (sirf admin dekh sakta hai)
+    plainPassword: password,
     createdAt: now, expiresAt: now+totalMs,
     label: label||username, revoked: false,
     allowedSlot: String(slotNum),
@@ -187,28 +164,21 @@ app.post("/api/admin/temp-accounts", requireAdmin, (req, res) => {
   res.json({ success: true, account: sanitizeAccount(account) });
 });
 
-// ─── GET /api/admin/temp-accounts ────────────────────────────────────────────
 app.get("/api/admin/temp-accounts", requireAdmin, (_req, res) => {
   const d = purgeAuthData(loadAuthData());
   res.json({ accounts: d.tempAccounts.map(sanitizeAccount) });
 });
 
-// ─── GET /api/admin/temp-accounts/passwords (admin only — passwords dekho) ────
 app.get("/api/admin/temp-accounts/passwords", requireAdmin, (_req, res) => {
   const d = purgeAuthData(loadAuthData());
   const result = d.tempAccounts.map(a => ({
-    id: a.id,
-    username: a.username,
-    label: a.label,
+    id: a.id, username: a.username, label: a.label,
     plainPassword: a.plainPassword || "N/A (purana account)",
-    allowedSlot: a.allowedSlot,
-    expiresAt: a.expiresAt,
-    revoked: a.revoked,
+    allowedSlot: a.allowedSlot, expiresAt: a.expiresAt, revoked: a.revoked,
   }));
   res.json({ accounts: result });
 });
 
-// ─── DELETE /api/admin/temp-accounts/:id ─────────────────────────────────────
 app.delete("/api/admin/temp-accounts/:id", requireAdmin, (req, res) => {
   const d = loadAuthData();
   const a = d.tempAccounts.find(a => a.id===req.params.id);
@@ -218,7 +188,6 @@ app.delete("/api/admin/temp-accounts/:id", requireAdmin, (req, res) => {
   saveAuthData(d); res.json({ success: true });
 });
 
-// ─── GET /api/admin/stats ─────────────────────────────────────────────────────
 app.get("/api/admin/stats", requireAdmin, (_req, res) => {
   const d   = purgeAuthData(loadAuthData());
   const now = Date.now();
@@ -234,16 +203,16 @@ function sanitizeAccount(a) {
   return { id:a.id, username:a.username, label:a.label, createdAt:a.createdAt, expiresAt:a.expiresAt, revoked:a.revoked, allowedSlot:a.allowedSlot||null };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ================================================================
 //  BOT SYSTEM
-// ═══════════════════════════════════════════════════════════════════════════════
+// ================================================================
 
-const RECONNECT_BASE_MS = 8_000;
+// Kick ke baad 10-15 second mein rejoin
+const RECONNECT_BASE_MS = 12_000;
 const RECONNECT_MAX_MS  = 5 * 60_000;
 const GHOST_DELAY_MS    = 45_000;
 const JITTER_MS         = 3_000;
 
-// ─── Persistence ──────────────────────────────────────────────────────────────
 function loadSlots() {
   try { if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, "utf-8")); } catch {}
   return {};
@@ -255,11 +224,14 @@ function getSlotData(id)       { return slotsData[String(id)] ?? null; }
 function setSlotData(id, data) { slotsData[String(id)] = data; saveSlots(slotsData); }
 function deleteSlotData(id)    { delete slotsData[String(id)]; saveSlots(slotsData); }
 
-// ─── Bot State ────────────────────────────────────────────────────────────────
 const botStates = new Map();
 
 function freshState(slotId) {
-  return { slotId, bot:null, reconnectTimer:null, afkTimer:null, shouldReconnect:false, isReconnecting:false, destroyed:true, reconnectAttempts:0 };
+  return {
+    slotId, bot: null, reconnectTimer: null, afkTimer: null,
+    shouldReconnect: false, isReconnecting: false,
+    destroyed: true, reconnectAttempts: 0
+  };
 }
 function getState(slotId) {
   const id = String(slotId);
@@ -270,9 +242,14 @@ function getState(slotId) {
 function emitStatus(slotId) {
   const state  = getState(slotId);
   const data   = getSlotData(slotId);
-  const status = { slotId:String(slotId), online:false, reconnecting:state.isReconnecting, playerCount:null, players:[], serverHost:data?.host??null };
+  const status = {
+    slotId: String(slotId), online: false,
+    reconnecting: state.isReconnecting,
+    playerCount: null, players: [],
+    serverHost: data?.host ?? null
+  };
   if (state.bot?.entity) {
-    const players       = Object.values(state.bot.players??{}).map(p=>p.username);
+    const players       = Object.values(state.bot.players ?? {}).map(p => p.username);
     status.online       = true;
     status.reconnecting = false;
     status.playerCount  = players.length;
@@ -282,196 +259,310 @@ function emitStatus(slotId) {
   return status;
 }
 function emitLog(slotId, sender, message) {
-  io.emit("botLog", { slotId:String(slotId), sender, message, timestamp:new Date().toISOString() });
+  io.emit("botLog", { slotId: String(slotId), sender, message, timestamp: new Date().toISOString() });
 }
 
-// ─── AFK helpers ──────────────────────────────────────────────────────────────
-function stopAfk(state) { if(state.afkTimer){clearInterval(state.afkTimer);state.afkTimer=null;} }
-function startAfk(state, cfg) {
-  stopAfk(state);
-  // Custom ping interval — default 30-40s agar set nahi
-  const baseInterval = cfg?.pingInterval ? Number(cfg.pingInterval) * 1000 : 30_000;
-  state.afkTimer = setInterval(()=>{
-    if(!state.bot?.entity) return;
-    try {
-      state.bot.look(state.bot.entity.yaw+(Math.random()-0.5)*0.5, state.bot.entity.pitch+(Math.random()-0.5)*0.2, false);
-      if(Math.random()<0.25){state.bot.setControlState("forward",true);setTimeout(()=>state.bot?.setControlState("forward",false),200);}
-      if(Math.random()<0.15){state.bot.setControlState("jump",true);setTimeout(()=>state.bot?.setControlState("jump",false),350);}
-    } catch {}
-  }, baseInterval + Math.random()*10_000);
-}
-
-// ─── Reconnect helpers ────────────────────────────────────────────────────────
-function cancelReconnect(state) { if(state.reconnectTimer){clearTimeout(state.reconnectTimer);state.reconnectTimer=null;} }
-function calcBackoff(attempts) {
-  const base = Math.min(RECONNECT_BASE_MS*(2**attempts), RECONNECT_MAX_MS);
-  return Math.max(RECONNECT_BASE_MS, base+(Math.random()-0.5)*2*JITTER_MS);
-}
-function destroyBot(state) {
-  if(state.destroyed) return;
-  state.destroyed=true; stopAfk(state);
-  const b=state.bot; state.bot=null; emitStatus(state.slotId);
-  try{b?.quit?.();}catch{} try{b?.end?.();}catch{}
-}
-function scheduleReconnect(state, delayOverrideMs) {
-  cancelReconnect(state);
-  if(!state.shouldReconnect) return;
-  state.isReconnecting=true; emitStatus(state.slotId);
-  const delay=delayOverrideMs??calcBackoff(state.reconnectAttempts);
-  state.reconnectAttempts++;
-  emitLog(state.slotId,"[System]",`🔄 Reconnect #${state.reconnectAttempts} in ${Math.round(delay/1000)}s...`);
-  state.reconnectTimer=setTimeout(()=>{
-    state.reconnectTimer=null;
-    if(state.shouldReconnect){const data=getSlotData(state.slotId);if(data)createMineflayerBot(state.slotId,data);}
-  },delay);
-}
-
-// ─── Core bot factory ─────────────────────────────────────────────────────────
-function createMineflayerBot(slotId, cfg) {
-  const state=getState(slotId); state.destroyed=false;
-
-  // FPS → physicsInterval (ms per tick). Default 50ms = 20fps
-  const physicsTick = cfg.fps ? Math.round(1000 / Number(cfg.fps)) : 50;
-
-  const b=mineflayer.createBot({
-    host:cfg.host, port:Number(cfg.port)||25565, username:cfg.username,
-    version:cfg.version&&cfg.version!=="auto"?cfg.version:false,
-    auth:"offline", hideErrors:true, physicsEnabled:true,
-    checkTimeoutInterval:30_000,
-    // physicsInterval agar mineflayer version support kare
-    ...(physicsTick !== 50 ? { physicsInterval: physicsTick } : {}),
-  });
-  state.bot=b;
-  b.once("spawn",()=>{
-    if(b!==state.bot) return;
-    state.reconnectAttempts=0; state.isReconnecting=false; emitStatus(slotId);
-    const pingMs = cfg.pingInterval ? `${cfg.pingInterval}s ping` : "default ping";
-    const fpsVal = cfg.fps ? `${cfg.fps} FPS` : "default FPS";
-    emitLog(slotId,"[System]",`✅ Joined ${cfg.host}:${cfg.port||25565} as ${cfg.username} [${pingMs}, ${fpsVal}]`);
-    startAfk(state, cfg);
-    // Decrypt password before sending to Minecraft
-    const rp = decryptPass(cfg.password);
-    if(rp) setTimeout(()=>{if(b!==state.bot)return;try{b.chat(`/login ${rp}`);}catch{}},1_500);
-  });
-  b.on("chat",(username,message)=>{if(b!==state.bot||username===b.username)return;emitLog(slotId,username,message);});
-  b.on("message",(jsonMsg)=>{
-    if(b!==state.bot) return;
-    const raw=jsonMsg.toString(), lower=raw.toLowerCase();
-    const rp = decryptPass(cfg.password);
-    if(rp){
-      if(lower.includes("/register")||lower.includes("please register")||lower.includes("register with")){setTimeout(()=>{if(b!==state.bot)return;try{b.chat(`/register ${rp} ${rp}`);}catch{}},800);return;}
-      if(lower.includes("/login")||lower.includes("please login")||lower.includes("log in")){setTimeout(()=>{if(b!==state.bot)return;try{b.chat(`/login ${rp}`);}catch{}},800);return;}
+// ================================================================
+//  BUG FIX: Kick reason parser
+//  Pehle reason kabhi object hota tha toh .toLowerCase() crash
+//  karta tha aur scheduleReconnect kabhi call nahi hota tha.
+//  Ab safely string mein convert hoga — koi bhi format ho.
+// ================================================================
+function parseKickReason(reason) {
+  try {
+    if (typeof reason === "string") {
+      try {
+        const parsed = JSON.parse(reason);
+        return String(parsed?.text ?? parsed?.extra?.[0]?.text ?? reason);
+      } catch {
+        return reason;
+      }
     }
-    if(raw.trim()) emitLog(slotId,"[Server]",raw);
-  });
-  b.on("playerJoined",()=>{if(b===state.bot)emitStatus(slotId);});
-  b.on("playerLeft",  ()=>{if(b===state.bot)emitStatus(slotId);});
-  b.on("error",(err)=>{if(b!==state.bot)return;emitLog(slotId,"[Error]",err.message);});
-  b.on("kicked",(reason)=>{
-    if(b!==state.bot) return;
-    let msg=reason; try{msg=JSON.parse(reason)?.text??reason;}catch{}
-    emitLog(slotId,"[System]",`❌ Kicked: ${msg}`); destroyBot(state);
-    const isGhost=msg.toLowerCase().includes("already online")||msg.toLowerCase().includes("already connected")||msg.toLowerCase().includes("logged in from another location");
-    scheduleReconnect(state,isGhost?GHOST_DELAY_MS:undefined);
-  });
-  b.on("end",(reason)=>{
-    if(b!==state.bot) return;
-    emitLog(slotId,"[System]",`🔌 Disconnected: ${reason??"unknown"}`); destroyBot(state); scheduleReconnect(state);
-  });
-}
-
-// ─── Public API ───────────────────────────────────────────────────────────────
-function startSlot(slotId) {
-  const data=getSlotData(slotId); if(!data?.registered)return{ok:false,error:"Slot not registered"};
-  if(!data.host)return{ok:false,error:"No host configured"};
-  const state=getState(slotId);
-  state.shouldReconnect=false; cancelReconnect(state); destroyBot(state);
-  state.reconnectAttempts=0; state.shouldReconnect=true; state.isReconnecting=false; state.destroyed=false;
-  createMineflayerBot(slotId,data); return{ok:true};
-}
-function stopSlot(slotId) {
-  const state=getState(slotId);
-  state.shouldReconnect=false; state.isReconnecting=false; state.reconnectAttempts=0;
-  cancelReconnect(state); destroyBot(state); emitStatus(slotId); return{ok:true};
-}
-function restartSlot(slotId) { stopSlot(slotId); setTimeout(()=>startSlot(slotId),2_000); return{ok:true}; }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  EXPRESS ROUTES
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// Bot routes
-app.get("/api/slots", (_req, res) => {
-  const result={};
-  for(let i=1;i<=MAX_SLOTS;i++){const id=String(i),data=slotsData[id]??null,state=getState(id);result[id]={registered:data?.registered??false,username:data?.username??null,host:data?.host??null,online:!!(state.bot?.entity),reconnecting:state.isReconnecting,pingInterval:data?.pingInterval??null,fps:data?.fps??null};}
-  res.json(result);
-});
-app.get("/api/slot/:id/status",(req,res)=>{
-  const id=req.params.id,state=getState(id),data=getSlotData(id),online=!!(state.bot?.entity),players=online?Object.values(state.bot.players??{}).map(p=>p.username):[];
-  res.json({slotId:id,registered:data?.registered??false,online,reconnecting:state.isReconnecting,playerCount:players.length,players,host:data?.host??null,username:data?.username??null,pingInterval:data?.pingInterval??null,fps:data?.fps??null});
-});
-app.post("/api/slot/:id/register",(req,res)=>{
-  const id=req.params.id,num=Number(id);
-  if(!num||num<1||num>MAX_SLOTS){res.status(400).json({error:"Invalid slot ID (1-100)"});return;}
-  const{host,port,version,username,password,pingInterval,fps}=req.body;
-  if(!host||!username){res.status(400).json({error:"host and username required"});return;}
-  const existing=getSlotData(id)??{};
-  setSlotData(id,{
-    ...existing,
-    host, port:Number(port)||25565, version:version||"auto", username,
-    password:encryptPass(password),
-    registered:true,
-    pingInterval: pingInterval ? Number(pingInterval) : null,
-    fps: fps ? Number(fps) : null,
-  });
-  emitLog(id,"[System]",`📝 Slot ${id} registered: ${username} @ ${host} [ping:${pingInterval||'default'}s, fps:${fps||'default'}]`);
-  res.json({ok:true});
-});
-app.post("/api/slot/:id/start",(req,res)=>{const result=startSlot(req.params.id);if(!result.ok){res.status(400).json(result);return;}emitLog(req.params.id,"[System]","🚀 Bot starting...");res.json(result);});
-app.post("/api/slot/:id/stop",(req,res)=>{res.json(stopSlot(req.params.id));emitLog(req.params.id,"[System]","⏹ Bot stopped.");});
-app.post("/api/slot/:id/restart",(req,res)=>{res.json(restartSlot(req.params.id));emitLog(req.params.id,"[System]","🔄 Restarting bot...");});
-app.post("/api/slot/:id/chat",(req,res)=>{
-  const state=getState(req.params.id),{message}=req.body;
-  if(!message){res.status(400).json({error:"message required"});return;}
-  if(!state.bot?.entity){res.status(400).json({error:"Bot not online"});return;}
-  try{state.bot.chat(message);res.json({ok:true});}catch{res.status(500).json({error:"Failed to send"});}
-});
-app.delete("/api/slot/:id",(req,res)=>{
-  const id=req.params.id; stopSlot(id); deleteSlotData(id);
-  emitLog(id,"[System]",`🗑 Slot ${id} deleted.`); io.emit("slotDeleted",{slotId:id}); res.json({ok:true});
-});
-// Settings API — password kabhi return nahi hoga (public endpoint)
-app.get("/api/slot/:id/settings",(req,res)=>{
-  const d=getSlotData(req.params.id)??{};
-  const{password:_,...safe}=d; // password hata do
-  res.json(safe);
-});
-// Admin-only: bot ka password dekho
-app.get("/api/admin/slot/:id/password", requireAdmin, (req,res)=>{
-  const d=getSlotData(req.params.id);
-  if(!d?.registered){res.status(404).json({error:"Slot not registered"});return;}
-  const plain=decryptPass(d.password);
-  res.json({slotId:req.params.id, username:d.username, password:plain||"(no password set)"});
-});
-app.get("/api/healthz",(_req,res)=>res.json({status:"ok",activeBots:[...botStates.values()].filter(s=>s.bot?.entity).length}));
-app.get("/health",(_req,res)=>res.json({status:"ok",uptime:process.uptime(),activeBots:[...botStates.values()].filter(s=>s.bot?.entity).length}));
-
-// ─── Socket.IO ────────────────────────────────────────────────────────────────
-io.on("connection",(socket)=>{
-  console.log("[WS] Client connected:", socket.id);
-  for(let i=1;i<=MAX_SLOTS;i++) emitStatus(String(i));
-  socket.on("disconnect",()=>console.log("[WS] Client disconnected:", socket.id));
-});
-
-// ─── Auto-start saved slots ───────────────────────────────────────────────────
-for(const[id,data]of Object.entries(slotsData)){
-  if(data?.registered&&data?.host){
-    console.log(`[Boot] Auto-starting slot ${id}...`);
-    setTimeout(()=>startSlot(id), 3_000+Number(id)*300);
+    if (reason && typeof reason === "object") {
+      return String(reason.text ?? reason.message ?? JSON.stringify(reason));
+    }
+    return String(reason ?? "unknown");
+  } catch {
+    return "unknown";
   }
 }
 
-// ─── Self-ping keep-alive (Render 24/7) ──────────────────────────────────────
+// ================================================================
+//  ANTI-AFK — Har 20 second mein guaranteed movement
+//  Pehle: 25% chance forward, 15% jump — bahut weak tha
+//  Ab: har 20s HAMESHA forward(1s) → backward(1s) + jump
+// ================================================================
+function stopAfk(state) {
+  if (state.afkTimer) { clearInterval(state.afkTimer); state.afkTimer = null; }
+}
+
+function startAfk(state, cfg) {
+  stopAfk(state);
+  state.afkTimer = setInterval(() => {
+    if (!state.bot?.entity) return;
+    try {
+      // Forward 1 second
+      state.bot.setControlState("forward", true);
+      setTimeout(() => {
+        if (!state.bot?.entity) return;
+        state.bot.setControlState("forward", false);
+        // Backward 1 second
+        state.bot.setControlState("back", true);
+        setTimeout(() => {
+          if (!state.bot?.entity) return;
+          state.bot.setControlState("back", false);
+        }, 1_000);
+      }, 1_000);
+
+      // Jump 500ms ke baad, 400ms ke liye
+      setTimeout(() => {
+        if (!state.bot?.entity) return;
+        state.bot.setControlState("jump", true);
+        setTimeout(() => {
+          if (state.bot) state.bot.setControlState("jump", false);
+        }, 400);
+      }, 500);
+
+    } catch {}
+  }, 20_000); // Har 20 second mein
+}
+
+function cancelReconnect(state) {
+  if (state.reconnectTimer) { clearTimeout(state.reconnectTimer); state.reconnectTimer = null; }
+}
+function calcBackoff(attempts) {
+  const base = Math.min(RECONNECT_BASE_MS * (2 ** attempts), RECONNECT_MAX_MS);
+  return Math.max(RECONNECT_BASE_MS, base + (Math.random() - 0.5) * 2 * JITTER_MS);
+}
+function destroyBot(state) {
+  if (state.destroyed) return;
+  state.destroyed = true; stopAfk(state);
+  const b = state.bot; state.bot = null; emitStatus(state.slotId);
+  try { b?.quit?.(); } catch {} try { b?.end?.(); } catch {}
+}
+function scheduleReconnect(state, delayOverrideMs) {
+  cancelReconnect(state);
+  if (!state.shouldReconnect) return;
+  state.isReconnecting = true; emitStatus(state.slotId);
+  const delay = delayOverrideMs ?? calcBackoff(state.reconnectAttempts);
+  state.reconnectAttempts++;
+  emitLog(state.slotId, "[System]", `🔄 Reconnect #${state.reconnectAttempts} in ${Math.round(delay / 1000)}s...`);
+  state.reconnectTimer = setTimeout(() => {
+    state.reconnectTimer = null;
+    if (state.shouldReconnect) {
+      const data = getSlotData(state.slotId);
+      if (data) createMineflayerBot(state.slotId, data);
+    }
+  }, delay);
+}
+
+function createMineflayerBot(slotId, cfg) {
+  const state = getState(slotId);
+  state.destroyed = false;
+
+  const physicsTick = cfg.fps ? Math.round(1000 / Number(cfg.fps)) : 50;
+
+  const b = mineflayer.createBot({
+    host: cfg.host,
+    port: Number(cfg.port) || 25565,
+    username: cfg.username,
+    version: cfg.version && cfg.version !== "auto" ? cfg.version : false,
+    auth: "offline",
+    hideErrors: true,
+    physicsEnabled: true,
+    checkTimeoutInterval: 30_000,
+    ...(physicsTick !== 50 ? { physicsInterval: physicsTick } : {}),
+  });
+  state.bot = b;
+
+  b.once("spawn", () => {
+    if (b !== state.bot) return;
+    state.reconnectAttempts = 0; state.isReconnecting = false; emitStatus(slotId);
+    const pingMs = cfg.pingInterval ? `${cfg.pingInterval}s ping` : "default ping";
+    const fpsVal = cfg.fps ? `${cfg.fps} FPS` : "default FPS";
+    emitLog(slotId, "[System]", `✅ Joined ${cfg.host}:${cfg.port || 25565} as ${cfg.username} [${pingMs}, ${fpsVal}]`);
+    startAfk(state, cfg);
+    const rp = decryptPass(cfg.password);
+    if (rp) setTimeout(() => { if (b !== state.bot) return; try { b.chat(`/login ${rp}`); } catch {} }, 1_500);
+  });
+
+  b.on("chat", (username, message) => {
+    if (b !== state.bot || username === b.username) return;
+    emitLog(slotId, username, message);
+  });
+
+  b.on("message", (jsonMsg) => {
+    if (b !== state.bot) return;
+    const raw = jsonMsg.toString(), lower = raw.toLowerCase();
+    const rp = decryptPass(cfg.password);
+    if (rp) {
+      if (lower.includes("/register") || lower.includes("please register") || lower.includes("register with")) {
+        setTimeout(() => { if (b !== state.bot) return; try { b.chat(`/register ${rp} ${rp}`); } catch {} }, 800);
+        return;
+      }
+      if (lower.includes("/login") || lower.includes("please login") || lower.includes("log in")) {
+        setTimeout(() => { if (b !== state.bot) return; try { b.chat(`/login ${rp}`); } catch {} }, 800);
+        return;
+      }
+    }
+    if (raw.trim()) emitLog(slotId, "[Server]", raw);
+  });
+
+  b.on("playerJoined", () => { if (b === state.bot) emitStatus(slotId); });
+  b.on("playerLeft",   () => { if (b === state.bot) emitStatus(slotId); });
+  b.on("error", (err)  => { if (b !== state.bot) return; emitLog(slotId, "[Error]", String(err?.message ?? err)); });
+
+  // BUG FIX: parseKickReason() use karo — reason object bhi ho sakta hai
+  b.on("kicked", (reason) => {
+    if (b !== state.bot) return;
+    const msg = parseKickReason(reason);
+    emitLog(slotId, "[System]", `❌ Kicked: ${msg}`);
+    destroyBot(state);
+    const isGhost = msg.toLowerCase().includes("already online")
+      || msg.toLowerCase().includes("already connected")
+      || msg.toLowerCase().includes("logged in from another location");
+    scheduleReconnect(state, isGhost ? GHOST_DELAY_MS : undefined);
+  });
+
+  b.on("end", (reason) => {
+    if (b !== state.bot) return;
+    emitLog(slotId, "[System]", `🔌 Disconnected: ${String(reason ?? "unknown")}`);
+    destroyBot(state);
+    scheduleReconnect(state);
+  });
+}
+
+function startSlot(slotId) {
+  const data = getSlotData(slotId);
+  if (!data?.registered) return { ok: false, error: "Slot not registered" };
+  if (!data.host) return { ok: false, error: "No host configured" };
+  const state = getState(slotId);
+  state.shouldReconnect = false; cancelReconnect(state); destroyBot(state);
+  state.reconnectAttempts = 0; state.shouldReconnect = true;
+  state.isReconnecting = false; state.destroyed = false;
+  createMineflayerBot(slotId, data);
+  return { ok: true };
+}
+function stopSlot(slotId) {
+  const state = getState(slotId);
+  state.shouldReconnect = false; state.isReconnecting = false; state.reconnectAttempts = 0;
+  cancelReconnect(state); destroyBot(state); emitStatus(slotId);
+  return { ok: true };
+}
+function restartSlot(slotId) {
+  stopSlot(slotId);
+  setTimeout(() => startSlot(slotId), 2_000);
+  return { ok: true };
+}
+
+// ================================================================
+//  EXPRESS ROUTES
+// ================================================================
+
+app.get("/api/slots", (_req, res) => {
+  const result = {};
+  for (let i = 1; i <= MAX_SLOTS; i++) {
+    const id = String(i), data = slotsData[id] ?? null, state = getState(id);
+    result[id] = {
+      registered: data?.registered ?? false,
+      username: data?.username ?? null,
+      host: data?.host ?? null,
+      online: !!(state.bot?.entity),
+      reconnecting: state.isReconnecting,
+      pingInterval: data?.pingInterval ?? null,
+      fps: data?.fps ?? null,
+    };
+  }
+  res.json(result);
+});
+
+app.get("/api/slot/:id/status", (req, res) => {
+  const id = req.params.id, state = getState(id), data = getSlotData(id);
+  const online = !!(state.bot?.entity);
+  const players = online ? Object.values(state.bot.players ?? {}).map(p => p.username) : [];
+  res.json({
+    slotId: id, registered: data?.registered ?? false,
+    online, reconnecting: state.isReconnecting,
+    playerCount: players.length, players,
+    host: data?.host ?? null, username: data?.username ?? null,
+    pingInterval: data?.pingInterval ?? null, fps: data?.fps ?? null,
+  });
+});
+
+app.post("/api/slot/:id/register", (req, res) => {
+  const id = req.params.id, num = Number(id);
+  if (!num || num < 1 || num > MAX_SLOTS) { res.status(400).json({ error: "Invalid slot ID (1-100)" }); return; }
+  const { host, port, version, username, password, pingInterval, fps } = req.body;
+  if (!host || !username) { res.status(400).json({ error: "host and username required" }); return; }
+  const existing = getSlotData(id) ?? {};
+  setSlotData(id, {
+    ...existing,
+    host, port: Number(port) || 25565, version: version || "auto", username,
+    password: encryptPass(password),
+    registered: true,
+    pingInterval: pingInterval ? Number(pingInterval) : null,
+    fps: fps ? Number(fps) : null,
+  });
+  emitLog(id, "[System]", `📝 Slot ${id} registered: ${username} @ ${host} [ping:${pingInterval || 'default'}s, fps:${fps || 'default'}]`);
+  res.json({ ok: true });
+});
+
+app.post("/api/slot/:id/start", (req, res) => {
+  const result = startSlot(req.params.id);
+  if (!result.ok) { res.status(400).json(result); return; }
+  emitLog(req.params.id, "[System]", "🚀 Bot starting...");
+  res.json(result);
+});
+app.post("/api/slot/:id/stop", (req, res) => {
+  res.json(stopSlot(req.params.id));
+  emitLog(req.params.id, "[System]", "⏹ Bot stopped.");
+});
+app.post("/api/slot/:id/restart", (req, res) => {
+  res.json(restartSlot(req.params.id));
+  emitLog(req.params.id, "[System]", "🔄 Restarting bot...");
+});
+app.post("/api/slot/:id/chat", (req, res) => {
+  const state = getState(req.params.id), { message } = req.body;
+  if (!message) { res.status(400).json({ error: "message required" }); return; }
+  if (!state.bot?.entity) { res.status(400).json({ error: "Bot not online" }); return; }
+  try { state.bot.chat(message); res.json({ ok: true }); } catch { res.status(500).json({ error: "Failed to send" }); }
+});
+app.delete("/api/slot/:id", (req, res) => {
+  const id = req.params.id; stopSlot(id); deleteSlotData(id);
+  emitLog(id, "[System]", `🗑 Slot ${id} deleted.`);
+  io.emit("slotDeleted", { slotId: id });
+  res.json({ ok: true });
+});
+app.get("/api/slot/:id/settings", (req, res) => {
+  const d = getSlotData(req.params.id) ?? {};
+  const { password: _, ...safe } = d;
+  res.json(safe);
+});
+app.get("/api/admin/slot/:id/password", requireAdmin, (req, res) => {
+  const d = getSlotData(req.params.id);
+  if (!d?.registered) { res.status(404).json({ error: "Slot not registered" }); return; }
+  const plain = decryptPass(d.password);
+  res.json({ slotId: req.params.id, username: d.username, password: plain || "(no password set)" });
+});
+app.get("/api/healthz", (_req, res) => res.json({ status: "ok", activeBots: [...botStates.values()].filter(s => s.bot?.entity).length }));
+app.get("/health",     (_req, res) => res.json({ status: "ok", uptime: process.uptime(), activeBots: [...botStates.values()].filter(s => s.bot?.entity).length }));
+
+// ── Socket.IO ─────────────────────────────────────────────────────
+io.on("connection", (socket) => {
+  console.log("[WS] Client connected:", socket.id);
+  for (let i = 1; i <= MAX_SLOTS; i++) emitStatus(String(i));
+  socket.on("disconnect", () => console.log("[WS] Client disconnected:", socket.id));
+});
+
+// ── Auto-start saved slots ────────────────────────────────────────
+for (const [id, data] of Object.entries(slotsData)) {
+  if (data?.registered && data?.host) {
+    console.log(`[Boot] Auto-starting slot ${id}...`);
+    setTimeout(() => startSlot(id), 3_000 + Number(id) * 300);
+  }
+}
+
+// ── Self-ping keep-alive ──────────────────────────────────────────
 const pingTarget =
   process.env.APP_URL ||
   process.env.RENDER_EXTERNAL_URL ||
@@ -480,19 +571,18 @@ const pingTarget =
 if (pingTarget) {
   const base    = pingTarget.startsWith("http") ? pingTarget : `https://${pingTarget.split(",")[0]}`;
   const selfUrl = `${base}/health`;
-  const interval= parseInt(process.env.PING_INTERVAL_MS) || 4 * 60_000;
-  setInterval(async()=>{
-    try{
+  const interval = parseInt(process.env.PING_INTERVAL_MS) || 4 * 60_000;
+  setInterval(async () => {
+    try {
       await fetch(selfUrl);
       console.log(`[KeepAlive] ✅ Ping OK — ${new Date().toLocaleTimeString()}`);
-    }catch(e){
+    } catch (e) {
       console.warn(`[KeepAlive] ⚠️ Ping failed: ${e.message}`);
     }
   }, interval);
-  console.log(`[KeepAlive] 🚀 Self-ping started → ${selfUrl} every ${interval/1000}s`);
+  console.log(`[KeepAlive] 🚀 Self-ping started → ${selfUrl} every ${interval / 1000}s`);
 }
 
-httpServer.listen(PORT, ()=>console.log(`[Server] Running on port ${PORT}`));
+httpServer.listen(PORT, () => console.log(`[Server] Running on port ${PORT}`));
 
-// ─── Discord Bot ──────────────────────────────────────────────────────────────
-startDiscordBot().catch(e=>console.error("[Discord] Fatal:", e.message));
+startDiscordBot().catch(e => console.error("[Discord] Fatal:", e.message));
