@@ -2,6 +2,7 @@ import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import mineflayer from "mineflayer";
+import { SocksClient } from "socks";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -204,10 +205,43 @@ function sanitizeAccount(a) {
 }
 
 // ================================================================
+//  FREE PROXY ROTATION
+// ================================================================
+let proxyList = [];
+let proxyIndex = 0;
+
+async function fetchFreeProxies() {
+  try {
+    const res = await fetch("https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=5000&country=all&simplified=true");
+    const text = await res.text();
+    const list = text.trim().split("\n").map(line => {
+      const [host, port] = line.split(":");
+      return { host: host?.trim(), port: parseInt(port?.trim()) };
+    }).filter(p => p.host && p.port);
+    if (list.length > 0) {
+      proxyList = list;
+      proxyIndex = 0;
+      console.log(`[Proxy] ${proxyList.length} proxies loaded`);
+    }
+  } catch (e) {
+    console.log("[Proxy] Fetch failed:", e.message);
+  }
+}
+
+function getNextProxy() {
+  if (proxyList.length === 0) return null;
+  const proxy = proxyList[proxyIndex % proxyList.length];
+  proxyIndex++;
+  return proxy;
+}
+
+fetchFreeProxies();
+setInterval(fetchFreeProxies, 10 * 60 * 1000);
+
+// ================================================================
 //  BOT SYSTEM
 // ================================================================
 
-// Kick ke baad 10-15 second mein rejoin
 const RECONNECT_BASE_MS = 12_000;
 const RECONNECT_MAX_MS  = 5 * 60_000;
 const GHOST_DELAY_MS    = 45_000;
@@ -262,36 +296,21 @@ function emitLog(slotId, sender, message) {
   io.emit("botLog", { slotId: String(slotId), sender, message, timestamp: new Date().toISOString() });
 }
 
-// ================================================================
-//  BUG FIX: Kick reason parser
-//  Pehle reason kabhi object hota tha toh .toLowerCase() crash
-//  karta tha aur scheduleReconnect kabhi call nahi hota tha.
-//  Ab safely string mein convert hoga — koi bhi format ho.
-// ================================================================
 function parseKickReason(reason) {
   try {
     if (typeof reason === "string") {
       try {
         const parsed = JSON.parse(reason);
         return String(parsed?.text ?? parsed?.extra?.[0]?.text ?? reason);
-      } catch {
-        return reason;
-      }
+      } catch { return reason; }
     }
     if (reason && typeof reason === "object") {
       return String(reason.text ?? reason.message ?? JSON.stringify(reason));
     }
     return String(reason ?? "unknown");
-  } catch {
-    return "unknown";
-  }
+  } catch { return "unknown"; }
 }
 
-// ================================================================
-//  ANTI-AFK — Har 20 second mein guaranteed movement
-//  Pehle: 25% chance forward, 15% jump — bahut weak tha
-//  Ab: har 20s HAMESHA forward(1s) → backward(1s) + jump
-// ================================================================
 function stopAfk(state) {
   if (state.afkTimer) { clearInterval(state.afkTimer); state.afkTimer = null; }
 }
@@ -301,20 +320,16 @@ function startAfk(state, cfg) {
   state.afkTimer = setInterval(() => {
     if (!state.bot?.entity) return;
     try {
-      // Forward 1 second
       state.bot.setControlState("forward", true);
       setTimeout(() => {
         if (!state.bot?.entity) return;
         state.bot.setControlState("forward", false);
-        // Backward 1 second
         state.bot.setControlState("back", true);
         setTimeout(() => {
           if (!state.bot?.entity) return;
           state.bot.setControlState("back", false);
         }, 1_000);
       }, 1_000);
-
-      // Jump 500ms ke baad, 400ms ke liye
       setTimeout(() => {
         if (!state.bot?.entity) return;
         state.bot.setControlState("jump", true);
@@ -322,9 +337,8 @@ function startAfk(state, cfg) {
           if (state.bot) state.bot.setControlState("jump", false);
         }, 400);
       }, 500);
-
     } catch {}
-  }, 20_000); // Har 20 second mein
+  }, 20_000);
 }
 
 function cancelReconnect(state) {
@@ -361,6 +375,11 @@ function createMineflayerBot(slotId, cfg) {
   state.destroyed = false;
 
   const physicsTick = cfg.fps ? Math.round(1000 / Number(cfg.fps)) : 50;
+  const proxy = getNextProxy();
+
+  if (proxy) {
+    emitLog(slotId, "[System]", `🌐 Using proxy: ${proxy.host}:${proxy.port}`);
+  }
 
   const b = mineflayer.createBot({
     host: cfg.host,
@@ -372,6 +391,23 @@ function createMineflayerBot(slotId, cfg) {
     physicsEnabled: true,
     checkTimeoutInterval: 30_000,
     ...(physicsTick !== 50 ? { physicsInterval: physicsTick } : {}),
+    ...(proxy ? {
+      connect: (client) => {
+        SocksClient.createConnection({
+          proxy: { host: proxy.host, port: proxy.port, type: 5 },
+          command: "connect",
+          destination: { host: cfg.host, port: Number(cfg.port) || 25565 }
+        }, (err, info) => {
+          if (err) {
+            emitLog(slotId, "[System]", `⚠️ Proxy failed, direct connect karenge...`);
+            client.emit("error", err);
+            return;
+          }
+          client.setSocket(info.socket);
+          client.emit("connect");
+        });
+      }
+    } : {})
   });
   state.bot = b;
 
@@ -412,7 +448,6 @@ function createMineflayerBot(slotId, cfg) {
   b.on("playerLeft",   () => { if (b === state.bot) emitStatus(slotId); });
   b.on("error", (err)  => { if (b !== state.bot) return; emitLog(slotId, "[Error]", String(err?.message ?? err)); });
 
-  // BUG FIX: parseKickReason() use karo — reason object bhi ho sakta hai
   b.on("kicked", (reason) => {
     if (b !== state.bot) return;
     const msg = parseKickReason(reason);
@@ -547,14 +582,12 @@ app.get("/api/admin/slot/:id/password", requireAdmin, (req, res) => {
 app.get("/api/healthz", (_req, res) => res.json({ status: "ok", activeBots: [...botStates.values()].filter(s => s.bot?.entity).length }));
 app.get("/health",     (_req, res) => res.json({ status: "ok", uptime: process.uptime(), activeBots: [...botStates.values()].filter(s => s.bot?.entity).length }));
 
-// ── Socket.IO ─────────────────────────────────────────────────────
 io.on("connection", (socket) => {
   console.log("[WS] Client connected:", socket.id);
   for (let i = 1; i <= MAX_SLOTS; i++) emitStatus(String(i));
   socket.on("disconnect", () => console.log("[WS] Client disconnected:", socket.id));
 });
 
-// ── Auto-start saved slots ────────────────────────────────────────
 for (const [id, data] of Object.entries(slotsData)) {
   if (data?.registered && data?.host) {
     console.log(`[Boot] Auto-starting slot ${id}...`);
@@ -562,7 +595,6 @@ for (const [id, data] of Object.entries(slotsData)) {
   }
 }
 
-// ── Self-ping keep-alive ──────────────────────────────────────────
 const pingTarget =
   process.env.APP_URL ||
   process.env.RENDER_EXTERNAL_URL ||
