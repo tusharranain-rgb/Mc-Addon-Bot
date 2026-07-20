@@ -212,7 +212,7 @@ let proxyIndex = 0;
 
 async function fetchFreeProxies() {
   try {
-    const res = await fetch("https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=5000&country=all&simplified=true");
+    const res = await fetch("https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=1000&country=all&simplified=true");
     const text = await res.text();
     const list = text.trim().split("\n").map(line => {
       const [host, port] = line.split(":");
