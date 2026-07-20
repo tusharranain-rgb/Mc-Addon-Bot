@@ -207,19 +207,19 @@ function sanitizeAccount(a) {
 // ================================================================
 //  FREE PROXY ROTATION
 // ================================================================
-let proxyList = [];
+let proxyList  = [];
 let proxyIndex = 0;
 
 async function fetchFreeProxies() {
   try {
-    const res = await fetch("https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=1000&country=all&simplified=true");
+    const res  = await fetch("https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=1000&country=all&simplified=true");
     const text = await res.text();
     const list = text.trim().split("\n").map(line => {
       const [host, port] = line.split(":");
       return { host: host?.trim(), port: parseInt(port?.trim()) };
     }).filter(p => p.host && p.port);
     if (list.length > 0) {
-      proxyList = list;
+      proxyList  = list;
       proxyIndex = 0;
       console.log(`[Proxy] ${proxyList.length} proxies loaded`);
     }
@@ -370,15 +370,56 @@ function scheduleReconnect(state, delayOverrideMs) {
   }, delay);
 }
 
-function createMineflayerBot(slotId, cfg) {
+// ================================================================
+//  PROXY HELPER — working proxy dhundho (100% proxy connect)
+// ================================================================
+async function getWorkingProxySocket(slotId, cfg) {
+  const MAX_TRIES = 20;
+  for (let i = 0; i < MAX_TRIES; i++) {
+    const state = getState(slotId);
+    if (!state.shouldReconnect) return null;
+
+    const proxy = getNextProxy();
+    if (!proxy) {
+      emitLog(slotId, "[Error]", "❌ Proxy list khali hai! Thodi der baad retry hoga...");
+      return null;
+    }
+
+    emitLog(slotId, "[System]", `🌐 Proxy try ${i + 1}/${MAX_TRIES}: ${proxy.host}:${proxy.port}`);
+
+    try {
+      const info = await SocksClient.createConnection({
+        proxy: { host: proxy.host, port: proxy.port, type: 5 },
+        command: "connect",
+        destination: { host: cfg.host, port: Number(cfg.port) || 25565 },
+        timeout: 5000
+      });
+      emitLog(slotId, "[System]", `✅ Proxy kaam kar raha: ${proxy.host}:${proxy.port}`);
+      return info.socket;
+    } catch {
+      emitLog(slotId, "[System]", `❌ Proxy ${i + 1} fail, next try...`);
+      await new Promise(r => setTimeout(r, 300));
+    }
+  }
+  emitLog(slotId, "[Error]", `❌ ${MAX_TRIES} proxies try kiye, sab fail! Reconnect hoga...`);
+  return null;
+}
+
+// ================================================================
+//  BOT CREATE — 100% proxy se connect, direct connect nahi hoga
+// ================================================================
+async function createMineflayerBot(slotId, cfg) {
   const state = getState(slotId);
   state.destroyed = false;
 
   const physicsTick = cfg.fps ? Math.round(1000 / Number(cfg.fps)) : 50;
-  const proxy = getNextProxy();
 
-  if (proxy) {
-    emitLog(slotId, "[System]", `🌐 Using proxy: ${proxy.host}:${proxy.port}`);
+  const socket = await getWorkingProxySocket(slotId, cfg);
+  if (!socket || !state.shouldReconnect) {
+    state.destroyed = true;
+    emitStatus(slotId);
+    if (state.shouldReconnect) scheduleReconnect(state);
+    return;
   }
 
   const b = mineflayer.createBot({
@@ -391,23 +432,10 @@ function createMineflayerBot(slotId, cfg) {
     physicsEnabled: true,
     checkTimeoutInterval: 30_000,
     ...(physicsTick !== 50 ? { physicsInterval: physicsTick } : {}),
-    ...(proxy ? {
-      connect: (client) => {
-        SocksClient.createConnection({
-          proxy: { host: proxy.host, port: proxy.port, type: 5 },
-          command: "connect",
-          destination: { host: cfg.host, port: Number(cfg.port) || 25565 }
-        }, (err, info) => {
-          if (err) {
-            emitLog(slotId, "[System]", `⚠️ Proxy failed, direct connect karenge...`);
-            client.emit("error", err);
-            return;
-          }
-          client.setSocket(info.socket);
-          client.emit("connect");
-        });
-      }
-    } : {})
+    connect: (client) => {
+      client.setSocket(socket);
+      client.emit("connect");
+    }
   });
   state.bot = b;
 
