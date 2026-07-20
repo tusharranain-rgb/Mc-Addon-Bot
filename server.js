@@ -239,6 +239,18 @@ fetchFreeProxies();
 setInterval(fetchFreeProxies, 10 * 60 * 1000);
 
 // ================================================================
+//  INDIAN TIME HELPER (IST - Asia/Kolkata)
+// ================================================================
+function getISTTime() {
+  return new Date().toLocaleTimeString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  }).toUpperCase();
+}
+
+// ================================================================
 //  BOT SYSTEM
 // ================================================================
 
@@ -263,6 +275,7 @@ const botStates = new Map();
 function freshState(slotId) {
   return {
     slotId, bot: null, reconnectTimer: null, afkTimer: null,
+    timeAnnouncerTimer: null,
     shouldReconnect: false, isReconnecting: false,
     destroyed: true, reconnectAttempts: 0
   };
@@ -315,6 +328,10 @@ function stopAfk(state) {
   if (state.afkTimer) { clearInterval(state.afkTimer); state.afkTimer = null; }
 }
 
+function stopTimeAnnouncer(state) {
+  if (state.timeAnnouncerTimer) { clearInterval(state.timeAnnouncerTimer); state.timeAnnouncerTimer = null; }
+}
+
 function startAfk(state, cfg) {
   stopAfk(state);
   state.afkTimer = setInterval(() => {
@@ -341,6 +358,18 @@ function startAfk(state, cfg) {
   }, 20_000);
 }
 
+function startTimeAnnouncer(state, bot, slotId) {
+  stopTimeAnnouncer(state);
+  state.timeAnnouncerTimer = setInterval(() => {
+    if (!bot?.entity) return;
+    try {
+      const msg = `Now Time is - ${getISTTime()}`;
+      bot.chat(msg);
+      emitLog(slotId, "[Time]", `⏰ ${msg}`);
+    } catch {}
+  }, 10 * 60 * 1000); // har 10 minute mein
+}
+
 function cancelReconnect(state) {
   if (state.reconnectTimer) { clearTimeout(state.reconnectTimer); state.reconnectTimer = null; }
 }
@@ -350,7 +379,9 @@ function calcBackoff(attempts) {
 }
 function destroyBot(state) {
   if (state.destroyed) return;
-  state.destroyed = true; stopAfk(state);
+  state.destroyed = true;
+  stopAfk(state);
+  stopTimeAnnouncer(state);
   const b = state.bot; state.bot = null; emitStatus(state.slotId);
   try { b?.quit?.(); } catch {} try { b?.end?.(); } catch {}
 }
@@ -406,7 +437,7 @@ async function getWorkingProxySocket(slotId, cfg) {
 }
 
 // ================================================================
-//  BOT CREATE — 100% proxy se connect, direct connect nahi hoga
+//  BOT CREATE — 100% proxy + Indian Time Announcer
 // ================================================================
 async function createMineflayerBot(slotId, cfg) {
   const state = getState(slotId);
@@ -446,6 +477,7 @@ async function createMineflayerBot(slotId, cfg) {
     const fpsVal = cfg.fps ? `${cfg.fps} FPS` : "default FPS";
     emitLog(slotId, "[System]", `✅ Joined ${cfg.host}:${cfg.port || 25565} as ${cfg.username} [${pingMs}, ${fpsVal}]`);
     startAfk(state, cfg);
+    startTimeAnnouncer(state, b, slotId);
     const rp = decryptPass(cfg.password);
     if (rp) setTimeout(() => { if (b !== state.bot) return; try { b.chat(`/login ${rp}`); } catch {} }, 1_500);
   });
