@@ -208,10 +208,34 @@ function sanitizeAccount(a) {
 // ================================================================
 
 // Kick ke baad 10-15 second mein rejoin
-const RECONNECT_BASE_MS = 12_000;
-const RECONNECT_MAX_MS  = 5 * 60_000;
-const GHOST_DELAY_MS    = 45_000;
-const JITTER_MS         = 3_000;
+const RECONNECT_BASE_MS  = 12_000;
+const RECONNECT_MAX_MS   = 5 * 60_000;
+const GHOST_DELAY_MS     = 45_000;
+const JITTER_MS          = 3_000;
+
+// ================================================================
+//  SONAR ANTI-BOT — Verification pass hone ke 3s baad fast rejoin
+// ================================================================
+const SONAR_RECONNECT_MS = 3_000;
+
+/**
+ * Sonar anti-bot verification kick detect karta hai.
+ * Jab Sonar bot ko verify kar leta hai toh woh ek specific message
+ * ke saath disconnect karta hai — "successfully passed the verification"
+ * ya "you are now able to play on the server when you reconnect".
+ * Is case mein hame FAST reconnect karna chahiye, normal backoff se nahi.
+ */
+function isSonarKick(msg) {
+  const lower = String(msg ?? "").toLowerCase();
+  return (
+    lower.includes("successfully passed the verification") ||
+    lower.includes("you are now able to play on the server") ||
+    lower.includes("you are now able to play when you reconnect") ||
+    // Sonar ke kuch aur variants
+    (lower.includes("sonar") && lower.includes("reconnect")) ||
+    (lower.includes("verification") && lower.includes("reconnect"))
+  );
+}
 
 function loadSlots() {
   try { if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, "utf-8")); } catch {}
@@ -412,10 +436,23 @@ function createMineflayerBot(slotId, cfg) {
   b.on("playerLeft",   () => { if (b === state.bot) emitStatus(slotId); });
   b.on("error", (err)  => { if (b !== state.bot) return; emitLog(slotId, "[Error]", String(err?.message ?? err)); });
 
-  // BUG FIX: parseKickReason() use karo — reason object bhi ho sakta hai
+  // ================================================================
+  //  KICKED — Sonar verification pass → 3s fast reconnect
+  //  Ghost kick (already online) → 45s delay
+  //  Baaki sab → normal exponential backoff
+  // ================================================================
   b.on("kicked", (reason) => {
     if (b !== state.bot) return;
     const msg = parseKickReason(reason);
+
+    if (isSonarKick(msg)) {
+      // Sonar ne verify kar liya — seedha 3 second mein rejoin karo
+      emitLog(slotId, "[Sonar]", `🛡️ Sonar verification passed! Rejoining in ${SONAR_RECONNECT_MS / 1000}s...`);
+      destroyBot(state);
+      scheduleReconnect(state, SONAR_RECONNECT_MS);
+      return;
+    }
+
     emitLog(slotId, "[System]", `❌ Kicked: ${msg}`);
     destroyBot(state);
     const isGhost = msg.toLowerCase().includes("already online")
@@ -424,9 +461,21 @@ function createMineflayerBot(slotId, cfg) {
     scheduleReconnect(state, isGhost ? GHOST_DELAY_MS : undefined);
   });
 
+  // ================================================================
+  //  END — Sonar kabhi kabhi 'end' event se bhi disconnect karta hai
+  // ================================================================
   b.on("end", (reason) => {
     if (b !== state.bot) return;
-    emitLog(slotId, "[System]", `🔌 Disconnected: ${String(reason ?? "unknown")}`);
+    const reasonStr = String(reason ?? "unknown");
+
+    if (isSonarKick(reasonStr)) {
+      emitLog(slotId, "[Sonar]", `🛡️ Sonar verification passed! Rejoining in ${SONAR_RECONNECT_MS / 1000}s...`);
+      destroyBot(state);
+      scheduleReconnect(state, SONAR_RECONNECT_MS);
+      return;
+    }
+
+    emitLog(slotId, "[System]", `🔌 Disconnected: ${reasonStr}`);
     destroyBot(state);
     scheduleReconnect(state);
   });
