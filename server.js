@@ -431,6 +431,65 @@ function createMineflayerBot(slotId, cfg) {
   let loginSent    = false;
   let registerSent = false;
 
+  // ── mc_bot2 Sonar bypass variables ───────────────────────────
+  // These simulate a real Minecraft client during Sonar verification.
+  // Sonar checks: teleport confirm, gravity, keep-alive, brand packet,
+  // client settings, vehicle movement. Without these the bot gets stuck.
+  const SPAWN_X = 8, SPAWN_Z = 8;
+  let currentY       = 64;
+  let velocityY      = 0;
+  let teleportCount  = 0;
+  let currentSlot    = 0;
+  let inVehicle      = false;
+  let boatY          = 3000;
+  let boatVelocityY  = 0;
+  let vehicleInterval = null;
+  let gravityInterval = null;
+  let spawned        = false;
+
+  function simulateGravity() {
+    let y = currentY;
+    velocityY = 0;
+    let tick  = 0;
+    gravityInterval = setInterval(() => {
+      if (tick >= 30 || inVehicle || spawned) {
+        clearInterval(gravityInterval); gravityInterval = null; return;
+      }
+      velocityY = (velocityY - 0.08) * 0.98;
+      y += velocityY;
+      try { b._client.write("position", { x: SPAWN_X, y, z: SPAWN_Z, onGround: false }); } catch {}
+      tick++;
+      if (tick >= 20) {
+        try { b._client.write("position", { x: SPAWN_X, y, z: SPAWN_Z, onGround: true }); } catch {}
+        clearInterval(gravityInterval); gravityInterval = null;
+      }
+    }, 50);
+  }
+
+  function simulateVehicle() {
+    let tick = 0;
+    vehicleInterval = setInterval(() => {
+      if (!inVehicle || tick > 20 || spawned) {
+        clearInterval(vehicleInterval); vehicleInterval = null; return;
+      }
+      boatVelocityY -= 0.04;
+      boatY += boatVelocityY;
+      try {
+        b._client.write("look",         { yaw: Math.random() * 2 - 1, pitch: 0, onGround: false });
+        b._client.write("steer_vehicle",{ sideways: 0, forward: 0, jump: 0 });
+        b._client.write("steer_boat",   { leftPaddle: false, rightPaddle: false });
+        b._client.write("vehicle_move", { x: SPAWN_X, y: boatY, z: SPAWN_Z, yaw: 0, pitch: 0 });
+      } catch {}
+      tick++;
+    }, 50);
+  }
+
+  function cleanupBypassTimers() {
+    if (gravityInterval) { clearInterval(gravityInterval); gravityInterval = null; }
+    if (vehicleInterval) { clearInterval(vehicleInterval); vehicleInterval = null; }
+  }
+  // ─────────────────────────────────────────────────────────────
+
   const b = mineflayer.createBot({
     host:                 cfg.host,
     port:                 Number(cfg.port) || 25565,
@@ -444,9 +503,102 @@ function createMineflayerBot(slotId, cfg) {
   });
   state.bot = b;
 
+  // ── Low-level packet handler (mc_bot2 Sonar bypass) ──────────
+  // Handles packets that Sonar inspects to verify a real client.
+  b._client.on("packet", (data, meta) => {
+    if (b !== state.bot) return;
+
+    // Position teleport — confirm immediately, then respond with position
+    if (meta.name === "position") {
+      const isRelativeY = data.flags !== undefined && (data.flags & 0x02);
+      currentY = isRelativeY ? currentY + (data.y || 0) : (data.y ?? currentY);
+      teleportCount++;
+
+      if (data.teleportId !== undefined) {
+        try { b._client.write("teleport_confirm", { teleportId: data.teleportId }); } catch {}
+        setImmediate(() => {
+          try {
+            b._client.write("position_look", {
+              x: SPAWN_X, y: currentY, z: SPAWN_Z,
+              yaw: data.yaw || 0, pitch: -90, onGround: false,
+            });
+          } catch {}
+          if (teleportCount >= 2 && !gravityInterval) simulateGravity();
+        });
+      }
+    }
+
+    // Transaction / window confirm
+    if (meta.name === "transaction") {
+      try {
+        b._client.write("transaction", {
+          windowId: data.windowId, action: data.action, accepted: true,
+        });
+      } catch {}
+    }
+
+    // Keep-alive — mineflayer handles this but we mirror it for safety
+    if (meta.name === "keep_alive") {
+      try { b._client.write("keep_alive", { keepAliveId: data.keepAliveId }); } catch {}
+    }
+
+    // Held item slot sync
+    if (meta.name === "held_item_slot" && data.slot >= 0 && data.slot <= 8 && data.slot !== currentSlot) {
+      currentSlot = data.slot;
+      try { b._client.write("held_item_slot", { slotId: data.slot }); } catch {}
+    }
+
+    // Arm swing — mirror entity animations
+    if (meta.name === "entity_animation" && data.animation === 0) {
+      try { b._client.write("arm_animation", { hand: 0 }); } catch {}
+    }
+
+    // Track vehicle / boat Y position
+    if (meta.name === "spawn_entity" && data.y > 100 && data.y < 5000) {
+      boatY = data.y; boatVelocityY = 0;
+    }
+
+    // Enter vehicle (Sonar boat check)
+    if (meta.name === "set_passengers" && data.passengers?.length > 0) {
+      inVehicle = true;
+      simulateVehicle();
+    }
+
+    // Exit vehicle
+    if ((meta.name === "destroy_entities" || meta.name === "entity_destroy") && inVehicle) {
+      inVehicle = false;
+      if (vehicleInterval) { clearInterval(vehicleInterval); vehicleInterval = null; }
+      setTimeout(() => {
+        try {
+          b._client.write("position_look", {
+            x: SPAWN_X, y: boatY - 0.5, z: SPAWN_Z, yaw: 0, pitch: 0, onGround: false,
+          });
+        } catch {}
+      }, 50);
+    }
+  });
+
+  // ── Login — send brand + settings (makes bot look like vanilla) ──
+  b.on("login", () => {
+    if (b !== state.bot) return;
+    try {
+      b._client.write("custom_payload", {
+        channel: "minecraft:brand",
+        data: Buffer.from("\x07vanilla"),
+      });
+      b._client.write("settings", {
+        locale: "en_US", viewDistance: 8, chatFlags: 0,
+        chatColors: true, skinParts: 127, mainHand: 1,
+      });
+    } catch {}
+  });
+
   // ── Spawn ────────────────────────────────────────────────────
   b.once("spawn", () => {
     if (b !== state.bot) return;
+    spawned = true;
+    cleanupBypassTimers(); // Gravity / vehicle no longer needed after spawn
+
     // Real successful spawn — reset backoff counter
     state.reconnectAttempts = 0;
     state.isReconnecting    = false;
@@ -524,6 +676,7 @@ function createMineflayerBot(slotId, cfg) {
     const lower = msg.toLowerCase();
 
     emitLog(slotId, "[System]", `❌ Kicked: ${msg || "(no reason given)"}`);
+    cleanupBypassTimers();
 
     // Sonar verification success — ONLY matched on explicit success phrase
     if (isSonarVerificationKick(msg)) {
@@ -553,6 +706,7 @@ function createMineflayerBot(slotId, cfg) {
     if (b !== state.bot) return;
     const reasonStr = String(reason ?? "unknown");
     emitLog(slotId, "[System]", `🔌 Disconnected: ${reasonStr}`);
+    cleanupBypassTimers();
     destroyBot(state);
     if (!state.shouldReconnect) return;
 
