@@ -273,7 +273,24 @@ function parseKickReason(reason) {
     if (typeof reason === "string") {
       try {
         const parsed = JSON.parse(reason);
-        return String(parsed?.text ?? parsed?.extra?.[0]?.text ?? reason);
+        // Sabse pehle "text" field check karo
+        if (parsed?.text) return String(parsed.text);
+        // Phir "extra" array mein text dhundo
+        if (parsed?.extra) {
+          const texts = parsed.extra
+            .map(e => (typeof e === "string" ? e : e?.text ?? ""))
+            .filter(Boolean);
+          if (texts.length) return texts.join(" ");
+        }
+        // "with" array (translate format: {"translate":"...","with":["Sonar"]})
+        if (parsed?.with) {
+          const parts = parsed.with
+            .map(w => (typeof w === "string" ? w : w?.text ?? JSON.stringify(w)))
+            .filter(Boolean);
+          if (parts.length) return parts.join(" ");
+        }
+        // Fallback: pura JSON string
+        return reason;
       } catch {
         return reason;
       }
@@ -415,17 +432,26 @@ function createMineflayerBot(slotId, cfg) {
   // BUG FIX: parseKickReason() use karo — reason object bhi ho sakta hai
   b.on("kicked", (reason) => {
     if (b !== state.bot) return;
-    const msg = parseKickReason(reason);
-    const lower = msg.toLowerCase();
+
+    // Raw string bhi rakho — Sonar kabhi kabhi JSON mein text empty rakhta hai
+    // lekin raw string mein "sonar" hota hai
+    const rawStr = typeof reason === "string" ? reason : JSON.stringify(reason ?? "");
+    const msg    = parseKickReason(reason);
+    const lower  = msg.toLowerCase();
+    const rawLow = rawStr.toLowerCase();
+
+    // Debug: full raw reason log karo taaki future mein pata chale
+    emitLog(slotId, "[Debug]", `Raw kick: ${rawStr.slice(0, 200)}`);
 
     // ── Sonar Anti-Bot Verification ──────────────────────────────
     // Sonar bot ko kick karta hai verification ke liye.
-    // Kick message mein "successfully passed the verification" aata hai.
-    // Iss case mein bot ko 5 second mein rejoin karna hai —
-    // attempts bhi reset hote hain taaki backoff na badhe.
+    // Raw JSON ya parsed message dono mein check karo.
     const isSonarVerification =
       lower.includes("successfully passed the verification") ||
-      lower.includes("able to play on the server when you reconnect");
+      lower.includes("able to play on the server when you reconnect") ||
+      rawLow.includes("successfully passed the verification") ||
+      rawLow.includes("able to play on the server when you reconnect") ||
+      rawLow.includes("sonar");  // Raw mein "sonar" ka koi bhi mention
 
     if (isSonarVerification) {
       emitLog(slotId, "[Sonar]", `✅ Verification pass ho gayi! 5 second mein rejoin ho raha hai...`);
