@@ -212,7 +212,8 @@ const RECONNECT_MAX_MS   = 5 * 60_000;
 const GHOST_DELAY_MS     = 45_000;
 const JITTER_MS          = 3_000;
 const SONAR_RECONNECT_MS = 5_000;
-const SOCKET_ISSUE_MS    = 8_000;
+const SOCKET_ISSUE_MS    = 15_000;   // Sonar socket-close test ke baad thoda wait
+const SONAR_DENIED_MS    = 3 * 60_000; // "denied" = IP rate-limited, 3 min wait
 
 // ── Slot persistence ──────────────────────────────────────────────
 function loadSlots() {
@@ -689,10 +690,21 @@ function createMineflayerBot(slotId, cfg) {
 
     destroyBot(state);
 
-    // Ghost / duplicate session — wait longer before retry
+    // Sonar IP rate-limit — "denied, wait a few minutes"
+    const isDenied = lower.includes("denied from entering")
+      || lower.includes("wait a few minutes")
+      || lower.includes("currently denied");
+
+    // Ghost / duplicate session
     const isGhost = lower.includes("already online")
       || lower.includes("already connected")
       || lower.includes("logged in from another location");
+
+    if (isDenied) {
+      emitLog(slotId, "[Sonar]", `⏳ IP rate-limited by Sonar — 3 minute baad retry...`);
+      scheduleReconnect(state, SONAR_DENIED_MS, "sonar denied");
+      return;
+    }
 
     scheduleReconnect(
       state,
