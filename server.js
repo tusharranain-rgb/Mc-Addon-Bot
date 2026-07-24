@@ -287,23 +287,43 @@ function emitLog(slotId, sender, message) {
 }
 
 // ================================================================
-//  BUG FIX: Kick reason parser
-//  Pehle reason kabhi object hota tha toh .toLowerCase() crash
-//  karta tha aur scheduleReconnect kabhi call nahi hota tha.
-//  Ab safely string mein convert hoga — koi bhi format ho.
+//  Kick reason parser — Minecraft JSON chat format properly handle karta hai
+//
+//  BUG (pehle): `??` operator sirf null/undefined check karta hai.
+//  Sonar ka JSON hota hai: {"text":"","extra":[{"text":"You have
+//  successfully passed..."}]}  — yahan text="" (empty string) hoti hai
+//  toh ?? us par ruk jaata tha aur extra[] kabhi nahi padha jaata tha.
+//
+//  FIX: extractText() recursively Minecraft JSON chat component se
+//  saara text nikalta hai — chahe kitna bhi nested ho.
 // ================================================================
+function extractText(component) {
+  if (!component) return "";
+  if (typeof component === "string") return component;
+  let result = String(component.text || component.translate || "");
+  if (Array.isArray(component.extra)) {
+    for (const child of component.extra) result += extractText(child);
+  }
+  if (Array.isArray(component.with)) {
+    for (const child of component.with) result += extractText(child);
+  }
+  return result;
+}
+
 function parseKickReason(reason) {
   try {
     if (typeof reason === "string") {
       try {
         const parsed = JSON.parse(reason);
-        return String(parsed?.text ?? parsed?.extra?.[0]?.text ?? reason);
+        const extracted = extractText(parsed).trim();
+        return extracted || reason;
       } catch {
-        return reason;
+        return reason || "unknown";
       }
     }
     if (reason && typeof reason === "object") {
-      return String(reason.text ?? reason.message ?? JSON.stringify(reason));
+      const extracted = extractText(reason).trim();
+      return extracted || String(reason.message ?? JSON.stringify(reason));
     }
     return String(reason ?? "unknown");
   } catch {
