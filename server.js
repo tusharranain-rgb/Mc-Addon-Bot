@@ -419,19 +419,19 @@ function createMineflayerBot(slotId, cfg) {
     const lower = msg.toLowerCase();
 
     // ── Sonar Anti-Bot Verification ──────────────────────────────
-    // Sonar bot ko pehli baar kick karta hai verification ke liye.
+    // Sonar bot ko kick karta hai verification ke liye.
     // Kick message mein "successfully passed the verification" aata hai.
-    // Iss case mein bot ko seedha 3 second mein rejoin karna hai —
-    // koi backoff nahi, kyunki server ne khud bola hai "reconnect kar".
+    // Iss case mein bot ko 5 second mein rejoin karna hai —
+    // attempts bhi reset hote hain taaki backoff na badhe.
     const isSonarVerification =
       lower.includes("successfully passed the verification") ||
-      lower.includes("able to play on the server when you reconnect") ||
-      lower.includes("sonar");
+      lower.includes("able to play on the server when you reconnect");
 
     if (isSonarVerification) {
-      emitLog(slotId, "[Sonar]", `✅ Verification pass ho gayi! 3 second mein rejoin ho raha hai...`);
+      emitLog(slotId, "[Sonar]", `✅ Verification pass ho gayi! 5 second mein rejoin ho raha hai...`);
       destroyBot(state);
-      scheduleReconnect(state, 3_000); // Seedha 3 second mein rejoin
+      state.reconnectAttempts = 0; // Reset karo — Sonar ki wajah se backoff nahi badhna chahiye
+      scheduleReconnect(state, 5_000); // 5 second mein rejoin
       return;
     }
     // ─────────────────────────────────────────────────────────────
