@@ -207,49 +207,11 @@ function sanitizeAccount(a) {
 //  BOT SYSTEM
 // ================================================================
 
-// Normal reconnect delays
-const RECONNECT_BASE_MS  = 12_000;
-const RECONNECT_MAX_MS   = 5 * 60_000;
-const GHOST_DELAY_MS     = 45_000;
-const JITTER_MS          = 3_000;
-
-// ================================================================
-//  SONAR ANTI-BOT — Teen alag cases:
-//
-//  1. isSonarVerified → "successfully passed" → 3s fast rejoin
-//  2. isSonarDenied   → "currently denied"   → 3 minute wait
-//     (server khud kehta hai "wait a few minutes")
-//  3. isThrottled     → "connection throttled"→ 30s wait
-// ================================================================
-const SONAR_VERIFIED_MS = 3_000;        // verification pass → turant rejoin
-const SONAR_DENIED_MS   = 3 * 60_000;  // denied → 3 minute ruko
-const THROTTLE_MS       = 30_000;      // throttled → 30 second ruko
-
-// "You have successfully passed the verification. You are now able to play..."
-function isSonarVerified(msg) {
-  const lower = String(msg ?? "").toLowerCase();
-  return (
-    lower.includes("successfully passed the verification") ||
-    lower.includes("you are now able to play on the server") ||
-    lower.includes("you are now able to play when you reconnect")
-  );
-}
-
-// "You are currently denied from entering the server. Please wait a few minutes..."
-function isSonarDenied(msg) {
-  const lower = String(msg ?? "").toLowerCase();
-  return (
-    lower.includes("currently denied from entering") ||
-    lower.includes("currently denied") ||
-    (lower.includes("sonar") && lower.includes("denied"))
-  );
-}
-
-// "Connection throttled! Please wait before reconnecting."
-function isThrottled(msg) {
-  const lower = String(msg ?? "").toLowerCase();
-  return lower.includes("connection throttled") || lower.includes("throttled");
-}
+// Kick ke baad 10-15 second mein rejoin
+const RECONNECT_BASE_MS = 12_000;
+const RECONNECT_MAX_MS  = 5 * 60_000;
+const GHOST_DELAY_MS    = 45_000;
+const JITTER_MS         = 3_000;
 
 function loadSlots() {
   try { if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, "utf-8")); } catch {}
@@ -301,43 +263,23 @@ function emitLog(slotId, sender, message) {
 }
 
 // ================================================================
-//  Kick reason parser — Minecraft JSON chat format properly handle karta hai
-//
-//  BUG (pehle): `??` operator sirf null/undefined check karta hai.
-//  Sonar ka JSON hota hai: {"text":"","extra":[{"text":"You have
-//  successfully passed..."}]}  — yahan text="" (empty string) hoti hai
-//  toh ?? us par ruk jaata tha aur extra[] kabhi nahi padha jaata tha.
-//
-//  FIX: extractText() recursively Minecraft JSON chat component se
-//  saara text nikalta hai — chahe kitna bhi nested ho.
+//  BUG FIX: Kick reason parser
+//  Pehle reason kabhi object hota tha toh .toLowerCase() crash
+//  karta tha aur scheduleReconnect kabhi call nahi hota tha.
+//  Ab safely string mein convert hoga — koi bhi format ho.
 // ================================================================
-function extractText(component) {
-  if (!component) return "";
-  if (typeof component === "string") return component;
-  let result = String(component.text || component.translate || "");
-  if (Array.isArray(component.extra)) {
-    for (const child of component.extra) result += extractText(child);
-  }
-  if (Array.isArray(component.with)) {
-    for (const child of component.with) result += extractText(child);
-  }
-  return result;
-}
-
 function parseKickReason(reason) {
   try {
     if (typeof reason === "string") {
       try {
         const parsed = JSON.parse(reason);
-        const extracted = extractText(parsed).trim();
-        return extracted || reason;
+        return String(parsed?.text ?? parsed?.extra?.[0]?.text ?? reason);
       } catch {
-        return reason || "unknown";
+        return reason;
       }
     }
     if (reason && typeof reason === "object") {
-      const extracted = extractText(reason).trim();
-      return extracted || String(reason.message ?? JSON.stringify(reason));
+      return String(reason.text ?? reason.message ?? JSON.stringify(reason));
     }
     return String(reason ?? "unknown");
   } catch {
@@ -470,37 +412,29 @@ function createMineflayerBot(slotId, cfg) {
   b.on("playerLeft",   () => { if (b === state.bot) emitStatus(slotId); });
   b.on("error", (err)  => { if (b !== state.bot) return; emitLog(slotId, "[Error]", String(err?.message ?? err)); });
 
-  // ================================================================
-  //  KICKED — Sonar ke teen cases + ghost + normal backoff
-  // ================================================================
+  // BUG FIX: parseKickReason() use karo — reason object bhi ho sakta hai
   b.on("kicked", (reason) => {
     if (b !== state.bot) return;
     const msg = parseKickReason(reason);
     const lower = msg.toLowerCase();
 
-    if (isSonarVerified(msg)) {
-      // ✅ Sonar ne verify kar liya — 3s mein fast rejoin
-      emitLog(slotId, "[Sonar]", `🛡️ Sonar verification passed! Rejoining in ${SONAR_VERIFIED_MS / 1000}s...`);
-      destroyBot(state);
-      scheduleReconnect(state, SONAR_VERIFIED_MS);
-      return;
-    }
+    // ── Sonar Anti-Bot Verification ──────────────────────────────
+    // Sonar bot ko pehli baar kick karta hai verification ke liye.
+    // Kick message mein "successfully passed the verification" aata hai.
+    // Iss case mein bot ko seedha 3 second mein rejoin karna hai —
+    // koi backoff nahi, kyunki server ne khud bola hai "reconnect kar".
+    const isSonarVerification =
+      lower.includes("successfully passed the verification") ||
+      lower.includes("able to play on the server when you reconnect") ||
+      lower.includes("sonar");
 
-    if (isSonarDenied(msg)) {
-      // ⛔ Sonar ne abhi block kar rakha hai — 3 minute baad try karo
-      emitLog(slotId, "[Sonar]", `⛔ Sonar denied entry. Waiting ${SONAR_DENIED_MS / 60000} minutes before rejoining...`);
+    if (isSonarVerification) {
+      emitLog(slotId, "[Sonar]", `✅ Verification pass ho gayi! 3 second mein rejoin ho raha hai...`);
       destroyBot(state);
-      scheduleReconnect(state, SONAR_DENIED_MS);
+      scheduleReconnect(state, 3_000); // Seedha 3 second mein rejoin
       return;
     }
-
-    if (isThrottled(msg)) {
-      // 🐌 Bahut jaldi reconnect kar rahe the — 30s wait karo
-      emitLog(slotId, "[System]", `🐌 Connection throttled. Waiting ${THROTTLE_MS / 1000}s...`);
-      destroyBot(state);
-      scheduleReconnect(state, THROTTLE_MS);
-      return;
-    }
+    // ─────────────────────────────────────────────────────────────
 
     emitLog(slotId, "[System]", `❌ Kicked: ${msg}`);
     destroyBot(state);
@@ -510,28 +444,9 @@ function createMineflayerBot(slotId, cfg) {
     scheduleReconnect(state, isGhost ? GHOST_DELAY_MS : undefined);
   });
 
-  // ================================================================
-  //  END — socketClosed ya Sonar end event handle karo
-  // ================================================================
   b.on("end", (reason) => {
     if (b !== state.bot) return;
-    const reasonStr = String(reason ?? "unknown");
-
-    if (isSonarVerified(reasonStr)) {
-      emitLog(slotId, "[Sonar]", `🛡️ Sonar verification passed! Rejoining in ${SONAR_VERIFIED_MS / 1000}s...`);
-      destroyBot(state);
-      scheduleReconnect(state, SONAR_VERIFIED_MS);
-      return;
-    }
-
-    if (isSonarDenied(reasonStr)) {
-      emitLog(slotId, "[Sonar]", `⛔ Sonar denied. Waiting ${SONAR_DENIED_MS / 60000} minutes...`);
-      destroyBot(state);
-      scheduleReconnect(state, SONAR_DENIED_MS);
-      return;
-    }
-
-    emitLog(slotId, "[System]", `🔌 Disconnected: ${reasonStr}`);
+    emitLog(slotId, "[System]", `🔌 Disconnected: ${String(reason ?? "unknown")}`);
     destroyBot(state);
     scheduleReconnect(state);
   });
