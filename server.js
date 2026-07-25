@@ -207,39 +207,30 @@ function sanitizeAccount(a) {
 //  BOT SYSTEM
 // ================================================================
 
-const RECONNECT_BASE_MS  = 12_000;
-const RECONNECT_MAX_MS   = 5 * 60_000;
-const GHOST_DELAY_MS     = 45_000;
-const JITTER_MS          = 3_000;
-const SONAR_RECONNECT_MS = 5_000;
-const SOCKET_ISSUE_MS    = 15_000;   // Sonar socket-close test ke baad thoda wait
-const SONAR_DENIED_MS    = 3 * 60_000; // "denied" = IP rate-limited, 3 min wait
+// Kick ke baad 10-15 second mein rejoin
+const RECONNECT_BASE_MS = 12_000;
+const RECONNECT_MAX_MS  = 5 * 60_000;
+const GHOST_DELAY_MS    = 45_000;
+const JITTER_MS         = 3_000;
 
-// ── Slot persistence ──────────────────────────────────────────────
 function loadSlots() {
   try { if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, "utf-8")); } catch {}
   return {};
 }
-function saveSlots(slots) { try { fs.writeFileSync(DATA_FILE, JSON.stringify(slots, null, 2), "utf-8"); } catch {} }
+function saveSlots(slots) { try { fs.writeFileSync(DATA_FILE, JSON.stringify(slots,null,2),"utf-8"); } catch {} }
 
 let slotsData = loadSlots();
 function getSlotData(id)       { return slotsData[String(id)] ?? null; }
 function setSlotData(id, data) { slotsData[String(id)] = data; saveSlots(slotsData); }
 function deleteSlotData(id)    { delete slotsData[String(id)]; saveSlots(slotsData); }
 
-// ── State management ──────────────────────────────────────────────
 const botStates = new Map();
 
 function freshState(slotId) {
   return {
-    slotId,
-    bot:              null,
-    reconnectTimer:   null,
-    afkTimer:         null,
-    shouldReconnect:  false,
-    isReconnecting:   false,
-    destroyed:        true,
-    reconnectAttempts: 0,
+    slotId, bot: null, reconnectTimer: null, afkTimer: null,
+    shouldReconnect: false, isReconnecting: false,
+    destroyed: true, reconnectAttempts: 0
   };
 }
 function getState(slotId) {
@@ -248,7 +239,6 @@ function getState(slotId) {
   return botStates.get(id);
 }
 
-// ── Socket.IO helpers ─────────────────────────────────────────────
 function emitStatus(slotId) {
   const state  = getState(slotId);
   const data   = getSlotData(slotId);
@@ -256,7 +246,7 @@ function emitStatus(slotId) {
     slotId: String(slotId), online: false,
     reconnecting: state.isReconnecting,
     playerCount: null, players: [],
-    serverHost: data?.host ?? null,
+    serverHost: data?.host ?? null
   };
   if (state.bot?.entity) {
     const players       = Object.values(state.bot.players ?? {}).map(p => p.username);
@@ -272,40 +262,24 @@ function emitLog(slotId, sender, message) {
   io.emit("botLog", { slotId: String(slotId), sender, message, timestamp: new Date().toISOString() });
 }
 
-// ── Kick reason parser ────────────────────────────────────────────
-// Recursively extracts human-readable text from Minecraft JSON chat
-// components (text, extra[], translate/with[]).
-// Never relies on JSON.stringify for detection.
-function extractChatText(component) {
-  if (!component) return "";
-  if (typeof component === "string") return component;
-  let text = component.text ? String(component.text) : "";
-  if (Array.isArray(component.extra)) {
-    text += component.extra.map(extractChatText).join("");
-  }
-  // translate format — use translate key as fallback label only
-  if (!text && component.translate) {
-    text = component.translate;
-    if (Array.isArray(component.with)) {
-      const args = component.with.map(extractChatText).join(", ");
-      if (args) text += `: ${args}`;
-    }
-  }
-  return text;
-}
-
+// ================================================================
+//  BUG FIX: Kick reason parser
+//  Pehle reason kabhi object hota tha toh .toLowerCase() crash
+//  karta tha aur scheduleReconnect kabhi call nahi hota tha.
+//  Ab safely string mein convert hoga — koi bhi format ho.
+// ================================================================
 function parseKickReason(reason) {
   try {
     if (typeof reason === "string") {
       try {
         const parsed = JSON.parse(reason);
-        return extractChatText(parsed).trim() || reason.trim();
+        return String(parsed?.text ?? parsed?.extra?.[0]?.text ?? reason);
       } catch {
-        return reason.trim();
+        return reason;
       }
     }
     if (reason && typeof reason === "object") {
-      return extractChatText(reason).trim() || String(reason.message ?? "unknown");
+      return String(reason.text ?? reason.message ?? JSON.stringify(reason));
     }
     return String(reason ?? "unknown");
   } catch {
@@ -313,41 +287,26 @@ function parseKickReason(reason) {
   }
 }
 
-// Sonar verification — ONLY if the explicit success phrase is present
-// in the human-readable parsed message. No JSON.stringify, no broad
-// "sonar" keyword matching.
-function isSonarVerificationKick(parsedMsg) {
-  const lower = parsedMsg.toLowerCase();
-  return (
-    lower.includes("successfully passed the verification") ||
-    lower.includes("able to play on the server when you reconnect")
-  );
-}
-
-// ── AFK system ────────────────────────────────────────────────────
-const ALL_CONTROLS = ["forward", "back", "left", "right", "jump", "sprint", "sneak"];
-
-function clearControls(bot) {
-  if (!bot) return;
-  for (const ctrl of ALL_CONTROLS) {
-    try { bot.setControlState(ctrl, false); } catch {}
-  }
-}
-
+// ================================================================
+//  ANTI-AFK — Har 20 second mein guaranteed movement
+//  Pehle: 25% chance forward, 15% jump — bahut weak tha
+//  Ab: har 20s HAMESHA forward(1s) → backward(1s) + jump
+// ================================================================
 function stopAfk(state) {
   if (state.afkTimer) { clearInterval(state.afkTimer); state.afkTimer = null; }
-  clearControls(state.bot);
 }
 
-function startAfk(state) {
+function startAfk(state, cfg) {
   stopAfk(state);
   state.afkTimer = setInterval(() => {
     if (!state.bot?.entity) return;
     try {
+      // Forward 1 second
       state.bot.setControlState("forward", true);
       setTimeout(() => {
         if (!state.bot?.entity) return;
         state.bot.setControlState("forward", false);
+        // Backward 1 second
         state.bot.setControlState("back", true);
         setTimeout(() => {
           if (!state.bot?.entity) return;
@@ -355,412 +314,141 @@ function startAfk(state) {
         }, 1_000);
       }, 1_000);
 
+      // Jump 500ms ke baad, 400ms ke liye
       setTimeout(() => {
         if (!state.bot?.entity) return;
         state.bot.setControlState("jump", true);
         setTimeout(() => {
-          if (state.bot?.entity) state.bot.setControlState("jump", false);
+          if (state.bot) state.bot.setControlState("jump", false);
         }, 400);
       }, 500);
+
     } catch {}
-  }, 20_000);
+  }, 20_000); // Har 20 second mein
 }
 
-// ── Reconnect logic ───────────────────────────────────────────────
 function cancelReconnect(state) {
   if (state.reconnectTimer) { clearTimeout(state.reconnectTimer); state.reconnectTimer = null; }
 }
-
 function calcBackoff(attempts) {
   const base = Math.min(RECONNECT_BASE_MS * (2 ** attempts), RECONNECT_MAX_MS);
   return Math.max(RECONNECT_BASE_MS, base + (Math.random() - 0.5) * 2 * JITTER_MS);
 }
-
-function scheduleReconnect(state, delayOverrideMs, reason) {
-  // Prevent duplicate reconnect timers
-  if (state.reconnectTimer) return;
+function destroyBot(state) {
+  if (state.destroyed) return;
+  state.destroyed = true; stopAfk(state);
+  const b = state.bot; state.bot = null; emitStatus(state.slotId);
+  try { b?.quit?.(); } catch {} try { b?.end?.(); } catch {}
+}
+function scheduleReconnect(state, delayOverrideMs) {
+  cancelReconnect(state);
   if (!state.shouldReconnect) return;
-
-  state.isReconnecting = true;
-  emitStatus(state.slotId);
-
-  const delay      = delayOverrideMs ?? calcBackoff(state.reconnectAttempts);
+  state.isReconnecting = true; emitStatus(state.slotId);
+  const delay = delayOverrideMs ?? calcBackoff(state.reconnectAttempts);
   state.reconnectAttempts++;
-  const reasonPart = reason ? ` — ${reason}` : "";
-  emitLog(state.slotId, "[System]",
-    `🔄 Reconnect #${state.reconnectAttempts} in ${Math.round(delay / 1000)}s...${reasonPart}`);
-
+  emitLog(state.slotId, "[System]", `🔄 Reconnect #${state.reconnectAttempts} in ${Math.round(delay / 1000)}s...`);
   state.reconnectTimer = setTimeout(() => {
     state.reconnectTimer = null;
-    if (!state.shouldReconnect) return;
-    const data = getSlotData(state.slotId);
-    if (data) createMineflayerBot(state.slotId, data);
+    if (state.shouldReconnect) {
+      const data = getSlotData(state.slotId);
+      if (data) createMineflayerBot(state.slotId, data);
+    }
   }, delay);
 }
 
-// ── Bot destroy ───────────────────────────────────────────────────
-function destroyBot(state) {
-  if (state.destroyed) return;
-  state.destroyed = true;
-
-  // Stop AFK and clear all control states before destroying
-  stopAfk(state);
-
-  const b = state.bot;
-  state.bot = null;
-  emitStatus(state.slotId);
-
-  if (b) {
-    // Remove all listeners — prevents ghost events from old instance
-    try { b.removeAllListeners(); } catch {}
-    try { b.quit?.(); }  catch {}
-    try { b.end?.(); }   catch {}
-  }
-}
-
-// ── Bot creation ──────────────────────────────────────────────────
 function createMineflayerBot(slotId, cfg) {
   const state = getState(slotId);
-
-  // Prevent multiple bot instances in one slot
-  if (!state.destroyed) destroyBot(state);
   state.destroyed = false;
 
   const physicsTick = cfg.fps ? Math.round(1000 / Number(cfg.fps)) : 50;
 
-  // Duplicate command guards — reset on each new connection
-  let loginSent    = false;
-  let registerSent = false;
-
-  // ── mc_bot2 Sonar bypass variables ───────────────────────────
-  // These simulate a real Minecraft client during Sonar verification.
-  // Sonar checks: teleport confirm, gravity, keep-alive, brand packet,
-  // client settings, vehicle movement. Without these the bot gets stuck.
-  const SPAWN_X = 8, SPAWN_Z = 8;
-  let currentY       = 64;
-  let velocityY      = 0;
-  let teleportCount  = 0;
-  let currentSlot    = 0;
-  let inVehicle      = false;
-  let boatY          = 3000;
-  let boatVelocityY  = 0;
-  let vehicleInterval = null;
-  let gravityInterval = null;
-  let spawned        = false;
-
-  function simulateGravity() {
-    let y = currentY;
-    velocityY = 0;
-    let tick  = 0;
-    gravityInterval = setInterval(() => {
-      if (tick >= 30 || inVehicle || spawned) {
-        clearInterval(gravityInterval); gravityInterval = null; return;
-      }
-      velocityY = (velocityY - 0.08) * 0.98;
-      y += velocityY;
-      try { b._client.write("position", { x: SPAWN_X, y, z: SPAWN_Z, onGround: false }); } catch {}
-      tick++;
-      if (tick >= 20) {
-        try { b._client.write("position", { x: SPAWN_X, y, z: SPAWN_Z, onGround: true }); } catch {}
-        clearInterval(gravityInterval); gravityInterval = null;
-      }
-    }, 50);
-  }
-
-  function simulateVehicle() {
-    let tick = 0;
-    vehicleInterval = setInterval(() => {
-      if (!inVehicle || tick > 20 || spawned) {
-        clearInterval(vehicleInterval); vehicleInterval = null; return;
-      }
-      boatVelocityY -= 0.04;
-      boatY += boatVelocityY;
-      try {
-        b._client.write("look",         { yaw: Math.random() * 2 - 1, pitch: 0, onGround: false });
-        b._client.write("steer_vehicle",{ sideways: 0, forward: 0, jump: 0 });
-        b._client.write("steer_boat",   { leftPaddle: false, rightPaddle: false });
-        b._client.write("vehicle_move", { x: SPAWN_X, y: boatY, z: SPAWN_Z, yaw: 0, pitch: 0 });
-      } catch {}
-      tick++;
-    }, 50);
-  }
-
-  function cleanupBypassTimers() {
-    if (gravityInterval) { clearInterval(gravityInterval); gravityInterval = null; }
-    if (vehicleInterval) { clearInterval(vehicleInterval); vehicleInterval = null; }
-  }
-  // ─────────────────────────────────────────────────────────────
-
   const b = mineflayer.createBot({
-    host:                 cfg.host,
-    port:                 Number(cfg.port) || 25565,
-    username:             cfg.username,
-    version:              cfg.version && cfg.version !== "auto" ? cfg.version : false,
-    auth:                 "offline",
-    hideErrors:           true,
-    physicsEnabled:       true,
+    host: cfg.host,
+    port: Number(cfg.port) || 25565,
+    username: cfg.username,
+    version: cfg.version && cfg.version !== "auto" ? cfg.version : false,
+    auth: "offline",
+    hideErrors: true,
+    physicsEnabled: true,
     checkTimeoutInterval: 30_000,
     ...(physicsTick !== 50 ? { physicsInterval: physicsTick } : {}),
   });
   state.bot = b;
 
-  // ── Low-level packet handler (mc_bot2 Sonar bypass) ──────────
-  // Handles packets that Sonar inspects to verify a real client.
-  b._client.on("packet", (data, meta) => {
-    if (b !== state.bot) return;
-
-    // Position teleport — confirm immediately, then respond with position
-    if (meta.name === "position") {
-      const isRelativeY = data.flags !== undefined && (data.flags & 0x02);
-      currentY = isRelativeY ? currentY + (data.y || 0) : (data.y ?? currentY);
-      teleportCount++;
-
-      if (data.teleportId !== undefined) {
-        try { b._client.write("teleport_confirm", { teleportId: data.teleportId }); } catch {}
-        setImmediate(() => {
-          try {
-            b._client.write("position_look", {
-              x: SPAWN_X, y: currentY, z: SPAWN_Z,
-              yaw: data.yaw || 0, pitch: -90, onGround: false,
-            });
-          } catch {}
-          if (teleportCount >= 2 && !gravityInterval) simulateGravity();
-        });
-      }
-    }
-
-    // Transaction / window confirm
-    if (meta.name === "transaction") {
-      try {
-        b._client.write("transaction", {
-          windowId: data.windowId, action: data.action, accepted: true,
-        });
-      } catch {}
-    }
-
-    // Keep-alive — mineflayer handles this but we mirror it for safety
-    if (meta.name === "keep_alive") {
-      try { b._client.write("keep_alive", { keepAliveId: data.keepAliveId }); } catch {}
-    }
-
-    // Held item slot sync
-    if (meta.name === "held_item_slot" && data.slot >= 0 && data.slot <= 8 && data.slot !== currentSlot) {
-      currentSlot = data.slot;
-      try { b._client.write("held_item_slot", { slotId: data.slot }); } catch {}
-    }
-
-    // Arm swing — mirror entity animations
-    if (meta.name === "entity_animation" && data.animation === 0) {
-      try { b._client.write("arm_animation", { hand: 0 }); } catch {}
-    }
-
-    // Track vehicle / boat Y position
-    if (meta.name === "spawn_entity" && data.y > 100 && data.y < 5000) {
-      boatY = data.y; boatVelocityY = 0;
-    }
-
-    // Enter vehicle (Sonar boat check)
-    if (meta.name === "set_passengers" && data.passengers?.length > 0) {
-      inVehicle = true;
-      simulateVehicle();
-    }
-
-    // Exit vehicle
-    if ((meta.name === "destroy_entities" || meta.name === "entity_destroy") && inVehicle) {
-      inVehicle = false;
-      if (vehicleInterval) { clearInterval(vehicleInterval); vehicleInterval = null; }
-      setTimeout(() => {
-        try {
-          b._client.write("position_look", {
-            x: SPAWN_X, y: boatY - 0.5, z: SPAWN_Z, yaw: 0, pitch: 0, onGround: false,
-          });
-        } catch {}
-      }, 50);
-    }
-  });
-
-  // ── Login — send brand + settings (makes bot look like vanilla) ──
-  b.on("login", () => {
-    if (b !== state.bot) return;
-    try {
-      b._client.write("custom_payload", {
-        channel: "minecraft:brand",
-        data: Buffer.from("\x07vanilla"),
-      });
-      b._client.write("settings", {
-        locale: "en_US", viewDistance: 8, chatFlags: 0,
-        chatColors: true, skinParts: 127, mainHand: 1,
-      });
-    } catch {}
-  });
-
-  // ── Spawn ────────────────────────────────────────────────────
   b.once("spawn", () => {
     if (b !== state.bot) return;
-    spawned = true;
-    cleanupBypassTimers(); // Gravity / vehicle no longer needed after spawn
-
-    // Real successful spawn — reset backoff counter
-    state.reconnectAttempts = 0;
-    state.isReconnecting    = false;
-    loginSent    = false;
-    registerSent = false;
-    emitStatus(slotId);
-
+    state.reconnectAttempts = 0; state.isReconnecting = false; emitStatus(slotId);
     const pingMs = cfg.pingInterval ? `${cfg.pingInterval}s ping` : "default ping";
     const fpsVal = cfg.fps ? `${cfg.fps} FPS` : "default FPS";
-    emitLog(slotId, "[System]",
-      `✅ Joined ${cfg.host}:${cfg.port || 25565} as ${cfg.username} [${pingMs}, ${fpsVal}]`);
-
-    startAfk(state);
-
+    emitLog(slotId, "[System]", `✅ Joined ${cfg.host}:${cfg.port || 25565} as ${cfg.username} [${pingMs}, ${fpsVal}]`);
+    startAfk(state, cfg);
     const rp = decryptPass(cfg.password);
-    if (rp && !loginSent) {
-      setTimeout(() => {
-        if (b !== state.bot) return;
-        try { b.chat(`/login ${rp}`); loginSent = true; } catch {}
-      }, 1_500);
-    }
+    if (rp) setTimeout(() => { if (b !== state.bot) return; try { b.chat(`/login ${rp}`); } catch {} }, 1_500);
   });
 
-  // ── Chat ──────────────────────────────────────────────────────
   b.on("chat", (username, message) => {
     if (b !== state.bot || username === b.username) return;
     emitLog(slotId, username, message);
   });
 
-  // ── Server messages (login / register prompts) ────────────────
   b.on("message", (jsonMsg) => {
     if (b !== state.bot) return;
-    const raw   = jsonMsg.toString();
-    const lower = raw.toLowerCase();
-    const rp    = decryptPass(cfg.password);
-
+    const raw = jsonMsg.toString(), lower = raw.toLowerCase();
+    const rp = decryptPass(cfg.password);
     if (rp) {
-      if (!registerSent &&
-          (lower.includes("/register") || lower.includes("please register") || lower.includes("register with"))) {
-        setTimeout(() => {
-          if (b !== state.bot) return;
-          try { b.chat(`/register ${rp} ${rp}`); registerSent = true; } catch {}
-        }, 800);
+      if (lower.includes("/register") || lower.includes("please register") || lower.includes("register with")) {
+        setTimeout(() => { if (b !== state.bot) return; try { b.chat(`/register ${rp} ${rp}`); } catch {} }, 800);
         return;
       }
-      if (!loginSent &&
-          (lower.includes("/login") || lower.includes("please login") || lower.includes("log in"))) {
-        setTimeout(() => {
-          if (b !== state.bot) return;
-          try { b.chat(`/login ${rp}`); loginSent = true; } catch {}
-        }, 800);
+      if (lower.includes("/login") || lower.includes("please login") || lower.includes("log in")) {
+        setTimeout(() => { if (b !== state.bot) return; try { b.chat(`/login ${rp}`); } catch {} }, 800);
         return;
       }
     }
-
     if (raw.trim()) emitLog(slotId, "[Server]", raw);
   });
 
-  // ── Player join / leave ───────────────────────────────────────
   b.on("playerJoined", () => { if (b === state.bot) emitStatus(slotId); });
   b.on("playerLeft",   () => { if (b === state.bot) emitStatus(slotId); });
+  b.on("error", (err)  => { if (b !== state.bot) return; emitLog(slotId, "[Error]", String(err?.message ?? err)); });
 
-  // ── Mineflayer errors (logged separately, not reconnected here)
-  b.on("error", (err) => {
-    if (b !== state.bot) return;
-    emitLog(slotId, "[Error]", `⚠️ ${err?.message ?? String(err)}`);
-    // "end" event fires after error — reconnect is handled there
-  });
-
-  // ── Kicked ────────────────────────────────────────────────────
+  // BUG FIX: parseKickReason() use karo — reason object bhi ho sakta hai
   b.on("kicked", (reason) => {
     if (b !== state.bot) return;
-
-    const msg   = parseKickReason(reason);
-    const lower = msg.toLowerCase();
-
-    emitLog(slotId, "[System]", `❌ Kicked: ${msg || "(no reason given)"}`);
-    cleanupBypassTimers();
-
-    // Sonar verification success — ONLY matched on explicit success phrase
-    if (isSonarVerificationKick(msg)) {
-      emitLog(slotId, "[Sonar]", `✅ Verification passed — reconnecting in ${SONAR_RECONNECT_MS / 1000}s...`);
-      destroyBot(state);
-      state.reconnectAttempts = 0;
-      scheduleReconnect(state, SONAR_RECONNECT_MS, "sonar verification");
-      return;
-    }
-
+    const msg = parseKickReason(reason);
+    emitLog(slotId, "[System]", `❌ Kicked: ${msg}`);
     destroyBot(state);
-
-    // Sonar IP rate-limit — "denied, wait a few minutes"
-    const isDenied = lower.includes("denied from entering")
-      || lower.includes("wait a few minutes")
-      || lower.includes("currently denied");
-
-    // Ghost / duplicate session
-    const isGhost = lower.includes("already online")
-      || lower.includes("already connected")
-      || lower.includes("logged in from another location");
-
-    if (isDenied) {
-      emitLog(slotId, "[Sonar]", `⏳ IP rate-limited by Sonar — 3 minute baad retry...`);
-      scheduleReconnect(state, SONAR_DENIED_MS, "sonar denied");
-      return;
-    }
-
-    scheduleReconnect(
-      state,
-      isGhost ? GHOST_DELAY_MS : undefined,
-      isGhost ? "ghost session" : "kicked"
-    );
+    const isGhost = msg.toLowerCase().includes("already online")
+      || msg.toLowerCase().includes("already connected")
+      || msg.toLowerCase().includes("logged in from another location");
+    scheduleReconnect(state, isGhost ? GHOST_DELAY_MS : undefined);
   });
 
-  // ── Disconnected / end ────────────────────────────────────────
   b.on("end", (reason) => {
     if (b !== state.bot) return;
-    const reasonStr = String(reason ?? "unknown");
-    emitLog(slotId, "[System]", `🔌 Disconnected: ${reasonStr}`);
-    cleanupBypassTimers();
+    emitLog(slotId, "[System]", `🔌 Disconnected: ${String(reason ?? "unknown")}`);
     destroyBot(state);
-    if (!state.shouldReconnect) return;
-
-    // socketClosed / timeout — use a shorter fixed delay
-    const isSocketIssue = reasonStr === "socketClosed" || reasonStr === "timeout";
-    scheduleReconnect(
-      state,
-      isSocketIssue ? SOCKET_ISSUE_MS : undefined,
-      reasonStr
-    );
+    scheduleReconnect(state);
   });
 }
 
-// ── Slot control ──────────────────────────────────────────────────
 function startSlot(slotId) {
   const data = getSlotData(slotId);
   if (!data?.registered) return { ok: false, error: "Slot not registered" };
-  if (!data.host)        return { ok: false, error: "No host configured" };
-
+  if (!data.host) return { ok: false, error: "No host configured" };
   const state = getState(slotId);
-  state.shouldReconnect = false;
-  cancelReconnect(state);
-  destroyBot(state);
-  state.reconnectAttempts = 0;
-  state.shouldReconnect   = true;
-  state.isReconnecting    = false;
-  state.destroyed         = false;
+  state.shouldReconnect = false; cancelReconnect(state); destroyBot(state);
+  state.reconnectAttempts = 0; state.shouldReconnect = true;
+  state.isReconnecting = false; state.destroyed = false;
   createMineflayerBot(slotId, data);
   return { ok: true };
 }
-
 function stopSlot(slotId) {
   const state = getState(slotId);
-  state.shouldReconnect   = false;
-  state.isReconnecting    = false;
-  state.reconnectAttempts = 0;
-  cancelReconnect(state);
-  destroyBot(state);
-  emitStatus(slotId);
+  state.shouldReconnect = false; state.isReconnecting = false; state.reconnectAttempts = 0;
+  cancelReconnect(state); destroyBot(state); emitStatus(slotId);
   return { ok: true };
 }
-
 function restartSlot(slotId) {
   stopSlot(slotId);
   setTimeout(() => startSlot(slotId), 2_000);
