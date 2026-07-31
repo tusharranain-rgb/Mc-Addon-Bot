@@ -228,7 +228,7 @@ const botStates = new Map();
 
 function freshState(slotId) {
   return {
-    slotId, bot: null, reconnectTimer: null, afkTimer: null, afkBusy: false,
+    slotId, bot: null, reconnectTimer: null, afkTimer: null,
     shouldReconnect: false, isReconnecting: false,
     destroyed: true, reconnectAttempts: 0
   };
@@ -288,217 +288,43 @@ function parseKickReason(reason) {
 }
 
 // ================================================================
-//  ANTI-AFK CONFIG  —  Yahan se poori activity loop configure karo
-//  Master switch, intervals aur har action ki settings yahan hain.
-//  Band karna ho toh `enabled: false` kar do — tab bot bilkul
-//  still rahega (purana AFK tarika). Per-slot override (optional):
-//  slot ki JSON me `antiAfkEnabled: false` daalne par sirf wahi
-//  slot band ho jayega, baaki unaffected.
-// ================================================================
-const ANTI_AFK = {
-  enabled:        true,        // Master switch: false = anti-afk band, bot still
-  minIntervalMs:  12_000,      // do actions ke beech minimum gap (ms)
-  maxIntervalMs:  35_000,      // do actions ke beech maximum gap (ms) — randomized
-  walkDurationMs: 1_000,       // ek direction me walk kitni der (ms)
-  walkReturn:     true,        // true = aage jaane ke baad wapas peeche se return
-  sneakDurationMs:1_200,       // sneak kitni der rakho (ms)
-  jumpDurationMs: 400,         // jump control on kitni der (ms)
-  lookSteps:      3,           // slow head rotation me kitne steps
-  lookStepDelayMs:350,         // rotation ke steps ke beech delay (ms)
-  lookYawStep:    0.6,         // har step me yaw kitna rotate (radians)
-  hotbarSlots:    [0,1,2,3,4,5,6,7,8], // switch karne ke liye hotbar slots
-};
-
-// Global defaults ko cfg (slot data) ke saath merge karta hai.
-// Sirf `antiAfkEnabled` field per-slot override hone deta hai.
-function getAfkConfig(cfg) {
-  const c = { ...ANTI_AFK };
-  if (cfg && typeof cfg.antiAfkEnabled === "boolean") c.enabled = cfg.antiAfkEnabled;
-  if (c.minIntervalMs > c.maxIntervalMs) c.minIntervalMs = c.maxIntervalMs; // safety
-  return c;
-}
-
-// Random integer [min, max] inclusive — action gaps ke liye
-function randInt(min, max) { return Math.floor(min + Math.random() * (max - min + 1)); }
-
-// Weighted random pick — kuch actions zyada common, kuch rare
-function pickWeighted(actions) {
-  const total = actions.reduce((s, a) => s + a.weight, 0);
-  let r = Math.random() * total;
-  for (const a of actions) { if ((r -= a.weight) < 0) return a; }
-  return actions[actions.length - 1];
-}
-
-// ── Harmless action functions ────────────────────────────────────
-// Har function (bot, cfg) leta hai aur MAANGTA hai "kitni der chalega"
-// (ms) return karta hai, taaki scheduler agle action tab tak na
-// schedule kare jab tak yeh khatam ho jaye. Sab safe hain — koi
-// block break/place nahi, koi chat spam nahi.
-
-// 1) Idhar-udhar dekhna — random yaw + thoda pitch
-function actLookAround(bot, c) {
-  try {
-    const yaw   = Math.random() * Math.PI * 2;
-    const pitch = (Math.random() - 0.5) * 0.6; // halka upar/neeche
-    bot.look(yaw, pitch, false);
-  } catch {}
-  return 250;
-}
-
-// 2) Sir dheere-dheere ghumana — incremental yaw steps
-function actRotateHead(bot, c) {
-  try {
-    const startYaw = bot.entity.yaw || 0;
-    let step = 0;
-    const rotate = () => {
-      try {
-        if (step >= c.lookSteps || !bot?.entity) return;
-        bot.look(startYaw + c.lookYawStep * (step + 1), bot.entity.pitch || 0, false);
-        step++;
-        setTimeout(rotate, c.lookStepDelayMs);
-      } catch {}
-    };
-    rotate();
-  } catch {}
-  return c.lookSteps * c.lookStepDelayMs + 300;
-}
-
-// 3) Thoda aage chal ke wapas aana (safe area, return enabled)
-function actWalk(bot, c) {
-  try {
-    bot.setControlState("forward", true);
-    setTimeout(() => {
-      if (!bot?.entity) return;
-      bot.setControlState("forward", false);
-      if (c.walkReturn) {
-        bot.setControlState("back", true);
-        setTimeout(() => {
-          if (!bot) return;
-          bot.setControlState("back", false);
-        }, c.walkDurationMs);
-      }
-    }, c.walkDurationMs);
-  } catch {}
-  return c.walkReturn ? c.walkDurationMs * 2 + 200 : c.walkDurationMs + 200;
-}
-
-// 4) Kabhi-kabhi jump
-function actJump(bot, c) {
-  try {
-    bot.setControlState("jump", true);
-    setTimeout(() => { if (bot) bot.setControlState("jump", false); }, c.jumpDurationMs);
-  } catch {}
-  return c.jumpDurationMs + 200;
-}
-
-// 5) Halki der sneak karna
-function actSneak(bot, c) {
-  try {
-    bot.setControlState("sneak", true);
-    setTimeout(() => { if (bot) bot.setControlState("sneak", false); }, c.sneakDurationMs);
-  } catch {}
-  return c.sneakDurationMs + 200;
-}
-
-// 6) Hotbar slot switch karna
-function actHotbar(bot, c) {
-  try {
-    const slots = c.hotbarSlots?.length ? c.hotbarSlots : [0,1,2,3,4,5,6,7,8];
-    const slot  = slots[Math.floor(Math.random() * slots.length)];
-    bot.setQuickBarSlot(slot);
-  } catch {}
-  return 300;
-}
-
-// 7) Inventory khol ke band karna (1.5s baad)
-function actInventory(bot) {
-  try {
-    bot.openInventory();
-    setTimeout(() => { try { bot.closeInventory(); } catch {} }, 1_500);
-  } catch {}
-  return 1_800;
-}
-
-// 8) Paas ke kisi block ki taraf dekhna (lookAt)
-function actLookAtBlock(bot) {
-  try {
-    const pos = bot.entity.position;
-    const dx  = Math.round((Math.random() - 0.5) * 6);
-    const dy  = Math.round((Math.random() - 0.5) * 3);
-    const dz  = Math.round((Math.random() - 0.5) * 6);
-    bot.lookAt(pos.offset(dx, dy, dz));
-  } catch {}
-  return 300;
-}
-
-// Weighted action list — weight zyada = zyada baar chalega
-const AFK_ACTIONS = [
-  { weight: 3, fn: actLookAround },
-  { weight: 2, fn: actRotateHead },
-  { weight: 3, fn: actWalk },
-  { weight: 2, fn: actJump },
-  { weight: 2, fn: actSneak },
-  { weight: 2, fn: actHotbar },
-  { weight: 1, fn: actInventory },
-  { weight: 2, fn: actLookAtBlock },
-];
-
-// Ek random action chalata hai aur `afkBusy` flag manage karta hai
-// taaki do action overlap na hon (agar interval bahut chhota ho).
-function runAfkAction(state, c) {
-  const bot = state.bot;
-  if (!bot?.entity) { state.afkBusy = false; return; }
-  const action = pickWeighted(AFK_ACTIONS);
-  state.afkBusy = true;
-  let dur = 300;
-  try { dur = action.fn(bot, c) || 300; } catch {}
-  // Action khatam hone ke thodi der baad busy flag hata do
-  setTimeout(() => { state.afkBusy = false; }, dur + 250);
-}
-
-// Self-rescheduling loop — har baar naya random gap (setTimeout),
-// fixed interval nahi, isliye detection se bachta hai.
-function scheduleNextAfk(state, cfg) {
-  const c = getAfkConfig(cfg);
-  if (!c.enabled) return; // band hai toh kuch schedule nahi
-  const gap = randInt(c.minIntervalMs, c.maxIntervalMs);
-  state.afkTimer = setTimeout(() => {
-    state.afkTimer = null;
-    if (!state.bot?.entity || !state.shouldReconnect) return;
-    if (!state.afkBusy) runAfkAction(state, c);
-    scheduleNextAfk(state, cfg); // agla action naye random gap ke baad
-  }, gap);
-}
-
-// ================================================================
-//  ANTI-AFK start/stop  —  purane fixed 20s interval loop ki
-//  jagah modular + randomized activity loop. Reconnect, auto-
-//  login, dashboard, Socket.IO, API sab pehle jaisa hi chalta hai.
+//  ANTI-AFK — Har 20 second mein guaranteed movement
+//  Pehle: 25% chance forward, 15% jump — bahut weak tha
+//  Ab: har 20s HAMESHA forward(1s) → backward(1s) + jump
 // ================================================================
 function stopAfk(state) {
-  if (state.afkTimer) { clearTimeout(state.afkTimer); state.afkTimer = null; }
-  state.afkBusy = false;
-  // Safety: agar koi control state on reh gaya ho toh off kar do
-  try {
-    const b = state.bot;
-    if (b?.entity) {
-      b.setControlState("forward", false);
-      b.setControlState("back", false);
-      b.setControlState("jump", false);
-      b.setControlState("sneak", false);
-    }
-  } catch {}
+  if (state.afkTimer) { clearInterval(state.afkTimer); state.afkTimer = null; }
 }
 
 function startAfk(state, cfg) {
   stopAfk(state);
-  const c = getAfkConfig(cfg);
-  if (!c.enabled) {
-    emitLog(state.slotId, "[Anti-AFK]", "Disabled — bot will stay still.");
-    return;
-  }
-  emitLog(state.slotId, "[Anti-AFK]", `Active — random action every ${c.minIntervalMs / 1000}-${c.maxIntervalMs / 1000}s.`);
-  scheduleNextAfk(state, cfg);
+  state.afkTimer = setInterval(() => {
+    if (!state.bot?.entity) return;
+    try {
+      // Forward 1 second
+      state.bot.setControlState("forward", true);
+      setTimeout(() => {
+        if (!state.bot?.entity) return;
+        state.bot.setControlState("forward", false);
+        // Backward 1 second
+        state.bot.setControlState("back", true);
+        setTimeout(() => {
+          if (!state.bot?.entity) return;
+          state.bot.setControlState("back", false);
+        }, 1_000);
+      }, 1_000);
+
+      // Jump 500ms ke baad, 400ms ke liye
+      setTimeout(() => {
+        if (!state.bot?.entity) return;
+        state.bot.setControlState("jump", true);
+        setTimeout(() => {
+          if (state.bot) state.bot.setControlState("jump", false);
+        }, 400);
+      }, 500);
+
+    } catch {}
+  }, 20_000); // Har 20 second mein
 }
 
 function cancelReconnect(state) {
