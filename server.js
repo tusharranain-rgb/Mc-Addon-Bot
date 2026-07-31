@@ -4,15 +4,36 @@ import https from "https";
 import http from "http";
 import { Server } from "socket.io";
 import mineflayer from "mineflayer";
-import pathfinderPkg from "mineflayer-pathfinder";
-import minecraftData from "minecraft-data";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
+import { createRequire } from "module";
 
-const { pathfinder, Movements, goals } = pathfinderPkg || {};
-const { GoalBlock } = goals || {};
+const customRequire = typeof require !== "undefined" ? require : createRequire(import.meta.url);
+
+let pathfinderPkg: any = null;
+let pathfinder: any = null;
+let Movements: any = null;
+let goals: any = null;
+let GoalBlock: any = null;
+
+try {
+  pathfinderPkg = customRequire("mineflayer-pathfinder");
+  pathfinder = pathfinderPkg?.pathfinder;
+  Movements = pathfinderPkg?.Movements;
+  goals = pathfinderPkg?.goals;
+  GoalBlock = goals?.GoalBlock;
+} catch (e) {
+  console.log("[Notice] mineflayer-pathfinder package not installed. Anti-AFK will run without pathfinder.");
+}
+
+let minecraftData: any = null;
+try {
+  minecraftData = customRequire("minecraft-data");
+} catch (e) {
+  console.log("[Notice] minecraft-data package not installed.");
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -41,9 +62,9 @@ const AUTH_FILE = path.join(__dirname, "auth-data.json");
 const LOGS_LIMIT = 500;
 
 // Logging store for web dashboard / logs
-const inMemoryLogs = [];
+const inMemoryLogs: string[] = [];
 
-function addGlobalLog(msg) {
+function addGlobalLog(msg: string) {
   const timestamp = new Date().toISOString();
   const formatted = `[${timestamp}] ${msg}`;
   inMemoryLogs.push(formatted);
@@ -53,7 +74,7 @@ function addGlobalLog(msg) {
   console.log(msg);
 }
 
-function getGlobalLogs() {
+function getGlobalLogs(): string[] {
   return [...inMemoryLogs];
 }
 
@@ -62,7 +83,7 @@ const ENC_KEY = crypto.createHash("sha256")
   .update(process.env.SESSION_SECRET || "mc-afk-enc-key-change-me")
   .digest();
 
-function encryptPass(text) {
+function encryptPass(text: string | null | undefined): string | null {
   if (!text) return null;
   try {
     const iv = crypto.randomBytes(16);
@@ -74,7 +95,7 @@ function encryptPass(text) {
   }
 }
 
-function decryptPass(enc) {
+function decryptPass(enc: string | null | undefined): string | null {
   if (!enc) return null;
   if (!enc.includes(":")) return enc;
   try {
@@ -90,35 +111,40 @@ function decryptPass(enc) {
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "kaiser";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin@kaiser";
 
-function hashPassword(pw) {
+function hashPassword(pw: string): string {
   return crypto.createHash("sha256").update(pw + "mc-afk-salt-2024").digest("hex");
 }
 
-function generateToken() {
+function generateToken(): string {
   return crypto.randomBytes(32).toString("hex");
 }
 
-function loadAuthData() {
+interface AuthData {
+  tempAccounts: any[];
+  sessions: any[];
+}
+
+function loadAuthData(): AuthData {
   try {
     if (fs.existsSync(AUTH_FILE)) return JSON.parse(fs.readFileSync(AUTH_FILE, "utf-8"));
   } catch {}
   return { tempAccounts: [], sessions: [] };
 }
 
-function saveAuthData(d) {
+function saveAuthData(d: AuthData) {
   try {
     fs.writeFileSync(AUTH_FILE, JSON.stringify(d, null, 2));
   } catch {}
 }
 
-function purgeAuthData(d) {
+function purgeAuthData(d: AuthData): AuthData {
   const now = Date.now();
   d.sessions = d.sessions.filter(s => s.expiresAt > now);
   d.tempAccounts = d.tempAccounts.filter(a => !a.revoked || a.expiresAt > now);
   return d;
 }
 
-function extractToken(req) {
+function extractToken(req: express.Request): string | null {
   const auth = req.headers.authorization;
   if (auth?.startsWith("Bearer ")) return auth.slice(7);
   const cookie = (req.headers.cookie || "").split(";").find(c => c.trim().startsWith("mc_token="));
@@ -126,31 +152,31 @@ function extractToken(req) {
   return null;
 }
 
-function getSession(req) {
+function getSession(req: express.Request) {
   const token = extractToken(req);
   if (!token) return null;
   const d = purgeAuthData(loadAuthData());
   return d.sessions.find(s => s.token === token && s.expiresAt > Date.now()) ?? null;
 }
 
-function requireAdmin(req, res, next) {
+function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
   const session = getSession(req);
   if (!session || session.type !== "admin") {
     res.status(403).json({ error: "Admin access required" });
     return;
   }
-  req.session = session;
+  (req as any).session = session;
   next();
 }
 
-function requireSlotAccess(req, res, next) {
+function requireSlotAccess(req: express.Request, res: express.Response, next: express.NextFunction) {
   const session = getSession(req);
   if (!session) {
     res.status(401).json({ error: "Not logged in" });
     return;
   }
   if (session.type === "admin") {
-    req.session = session;
+    (req as any).session = session;
     next();
     return;
   }
@@ -168,12 +194,12 @@ function requireSlotAccess(req, res, next) {
     res.status(403).json({ error: `Access denied — you can only use Slot ${account.allowedSlot}` });
     return;
   }
-  req.session = session;
-  req.allowedSlot = String(account.allowedSlot);
+  (req as any).session = session;
+  (req as any).allowedSlot = String(account.allowedSlot);
   next();
 }
 
-function sanitizeAccount(a) {
+function sanitizeAccount(a: any) {
   return {
     id: a.id,
     username: a.username,
@@ -185,7 +211,7 @@ function sanitizeAccount(a) {
   };
 }
 
-// AUTH API ROUTES
+// AUTH ROUTES
 app.post("/api/auth/login", (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
@@ -329,11 +355,13 @@ app.get("/api/admin/stats", requireAdmin, (_req, res) => {
   });
 });
 
+// ================================================================
 // DISCORD WEBHOOK INTEGRATION
+// ================================================================
 let lastDiscordSend = 0;
 const DISCORD_RATE_LIMIT_MS = 5000;
 
-function sendDiscordWebhook(content, color = 0x0099ff) {
+function sendDiscordWebhook(content: string, color = 0x0099ff) {
   const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
   if (!webhookUrl || webhookUrl.includes("YOUR_DISCORD")) return;
 
@@ -371,25 +399,28 @@ function sendDiscordWebhook(content, color = 0x0099ff) {
     req.on("error", (e) => addGlobalLog(`[Discord] Error: ${e.message}`));
     req.write(payload);
     req.end();
-  } catch (e) {
+  } catch (e: any) {
     addGlobalLog(`[Discord] Webhook error: ${e.message}`);
   }
 }
 
-// BOT SLOTS STORAGE & RECONNECT LOGIC
+// ================================================================
+//  BOT SYSTEM (MULTI-SLOT & ANTI-AFK MODULES)
+// ================================================================
+
 const RECONNECT_BASE_MS = 12_000;
 const RECONNECT_MAX_MS = 5 * 60_000;
 const GHOST_DELAY_MS = 45_000;
 const JITTER_MS = 3_000;
 
-function loadSlots() {
+function loadSlots(): Record<string, any> {
   try {
     if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
   } catch {}
   return {};
 }
 
-function saveSlots(slots) {
+function saveSlots(slots: Record<string, any>) {
   try {
     fs.writeFileSync(DATA_FILE, JSON.stringify(slots, null, 2), "utf-8");
   } catch {}
@@ -397,23 +428,38 @@ function saveSlots(slots) {
 
 let slotsData = loadSlots();
 
-function getSlotData(id) {
+function getSlotData(id: string) {
   return slotsData[String(id)] ?? null;
 }
 
-function setSlotData(id, data) {
+function setSlotData(id: string, data: any) {
   slotsData[String(id)] = data;
   saveSlots(slotsData);
 }
 
-function deleteSlotData(id) {
+function deleteSlotData(id: string) {
   delete slotsData[String(id)];
   saveSlots(slotsData);
 }
 
-const botStates = new Map();
+interface BotState {
+  slotId: string;
+  bot: any;
+  reconnectTimer: any;
+  afkTimers: any[];
+  shouldReconnect: boolean;
+  isReconnecting: boolean;
+  destroyed: boolean;
+  reconnectAttempts: number;
+  lastActivity: number;
+  startTime: number;
+  lockedTarget?: any;
+  lockedTargetExpiry?: number;
+}
 
-function freshState(slotId) {
+const botStates = new Map<string, BotState>();
+
+function freshState(slotId: string): BotState {
   return {
     slotId,
     bot: null,
@@ -428,26 +474,26 @@ function freshState(slotId) {
   };
 }
 
-function getState(slotId) {
+function getState(slotId: string): BotState {
   const id = String(slotId);
   if (!botStates.has(id)) botStates.set(id, freshState(id));
-  return botStates.get(id);
+  return botStates.get(id)!;
 }
 
-function emitStatus(slotId) {
+function emitStatus(slotId: string) {
   const state = getState(slotId);
   const data = getSlotData(slotId);
   const status = {
     slotId: String(slotId),
     online: false,
     reconnecting: state.isReconnecting,
-    playerCount: null,
-    players: [],
+    playerCount: null as number | null,
+    players: [] as string[],
     serverHost: data?.host ?? null,
     coords: state.bot?.entity?.position ?? null,
   };
   if (state.bot?.entity) {
-    const players = Object.values(state.bot.players ?? {}).map(p => p.username);
+    const players = Object.values(state.bot.players ?? {}).map((p: any) => p.username);
     status.online = true;
     status.reconnecting = false;
     status.playerCount = players.length;
@@ -457,13 +503,13 @@ function emitStatus(slotId) {
   return status;
 }
 
-function emitLog(slotId, sender, message) {
+function emitLog(slotId: string, sender: string, message: string) {
   const formatted = `[Slot ${slotId}] [${sender}] ${message}`;
   addGlobalLog(formatted);
   io.emit("botLog", { slotId: String(slotId), sender, message, timestamp: new Date().toISOString() });
 }
 
-function parseKickReason(reason) {
+function parseKickReason(reason: any): string {
   try {
     if (typeof reason === "string") {
       try {
@@ -482,20 +528,21 @@ function parseKickReason(reason) {
   }
 }
 
-function stopAfk(state) {
+// Clear internal timers for anti-AFK modules
+function stopAfk(state: BotState) {
   if (state.afkTimers && state.afkTimers.length > 0) {
     state.afkTimers.forEach(t => clearInterval(t));
     state.afkTimers = [];
   }
 }
 
-// ANTI-AFK ENGINE + COMBAT + AUTO-EAT + BED MODULES
-function startAfkModules(state, cfg) {
+// ADVANCED ANTI-AFK ENGINE + COMBAT + AUTO-EAT + BED MODULES
+function startAfkModules(state: BotState, cfg: any) {
   stopAfk(state);
   const b = state.bot;
   if (!b) return;
 
-  // 1. Guaranteed Movement Loop (Forward 1s -> Back 1s + Jump)
+  // 1. Movement AFK Loop (Forward/Back/Jump)
   const afkInterval = setInterval(() => {
     if (!state.bot?.entity) return;
     try {
@@ -553,7 +600,7 @@ function startAfkModules(state, cfg) {
   }, 15_000 + Math.floor(Math.random() * 20_000));
   state.afkTimers.push(lookInterval);
 
-  // 5. Sneak / Teabagging
+  // 5. Teabagging / Sneak
   const teabagInterval = setInterval(() => {
     if (!state.bot?.entity) return;
     if (Math.random() > 0.7) {
@@ -574,11 +621,11 @@ function startAfkModules(state, cfg) {
   }, 60_000 + Math.floor(Math.random() * 60_000));
   state.afkTimers.push(teabagInterval);
 
-  // 6. Auto-Eat
+  // 6. Auto-Eat on Health Event
   b.on("health", () => {
     try {
       if (b.food < 14) {
-        const food = b.inventory?.items()?.find(i => i.foodPoints && i.foodPoints > 0);
+        const food = b.inventory?.items()?.find((i: any) => i.foodPoints && i.foodPoints > 0);
         if (food) {
           b.equip(food, "hand")
             .then(() => b.consume())
@@ -588,7 +635,7 @@ function startAfkModules(state, cfg) {
     } catch {}
   });
 
-  // 7. Auto Bed Sleep
+  // 7. Auto Bed / Night Sleeping
   let isTryingToSleep = false;
   const bedInterval = setInterval(async () => {
     if (!state.bot?.entity) return;
@@ -596,14 +643,14 @@ function startAfkModules(state, cfg) {
       const isNight = b.time?.timeOfDay >= 12500 && b.time?.timeOfDay <= 23500;
       if (isNight && !isTryingToSleep) {
         const bedBlock = b.findBlock?.({
-          matching: (block) => block.name.includes("bed"),
+          matching: (block: any) => block.name.includes("bed"),
           maxDistance: 8,
         });
         if (bedBlock) {
           isTryingToSleep = true;
           try {
             await b.sleep(bedBlock);
-            emitLog(state.slotId, "[System]", "😴 Sleeping in bed...");
+            emitLog(state.slotId, "[System]", "😴 Sleeping in nearby bed...");
           } catch {} finally {
             isTryingToSleep = false;
           }
@@ -616,19 +663,19 @@ function startAfkModules(state, cfg) {
   state.afkTimers.push(bedInterval);
 }
 
-function cancelReconnect(state) {
+function cancelReconnect(state: BotState) {
   if (state.reconnectTimer) {
     clearTimeout(state.reconnectTimer);
     state.reconnectTimer = null;
   }
 }
 
-function calcBackoff(attempts) {
+function calcBackoff(attempts: number) {
   const base = Math.min(RECONNECT_BASE_MS * (2 ** attempts), RECONNECT_MAX_MS);
   return Math.max(RECONNECT_BASE_MS, base + (Math.random() - 0.5) * 2 * JITTER_MS);
 }
 
-function destroyBot(state) {
+function destroyBot(state: BotState) {
   if (state.destroyed) return;
   state.destroyed = true;
   stopAfk(state);
@@ -643,7 +690,7 @@ function destroyBot(state) {
   } catch {}
 }
 
-function scheduleReconnect(state, delayOverrideMs) {
+function scheduleReconnect(state: BotState, delayOverrideMs?: number) {
   cancelReconnect(state);
   if (!state.shouldReconnect) return;
   state.isReconnecting = true;
@@ -660,7 +707,7 @@ function scheduleReconnect(state, delayOverrideMs) {
   }, delay);
 }
 
-function createMineflayerBot(slotId, cfg) {
+function createMineflayerBot(slotId: string, cfg: any) {
   const state = getState(slotId);
   state.destroyed = false;
 
@@ -701,17 +748,19 @@ function createMineflayerBot(slotId, cfg) {
 
     startAfkModules(state, cfg);
 
+    // Auto Pathfinder default Movements setup
     if (minecraftData && Movements) {
       try {
         const mcData = minecraftData(b.version);
         if (mcData) {
           const move = new Movements(b);
           move.canDig = false;
-          b.pathfinder?.setMovements(move);
+          (b as any).pathfinder?.setMovements(move);
         }
       } catch {}
     }
 
+    // Auto login/register password execution
     const rp = decryptPass(cfg.password);
     if (rp) {
       setTimeout(() => {
@@ -723,12 +772,12 @@ function createMineflayerBot(slotId, cfg) {
     }
   });
 
-  b.on("chat", (username, message) => {
+  b.on("chat", (username: string, message: string) => {
     if (b !== state.bot || username === b.username) return;
     emitLog(slotId, username, message);
   });
 
-  b.on("message", (jsonMsg) => {
+  b.on("message", (jsonMsg: any) => {
     if (b !== state.bot) return;
     const raw = jsonMsg.toString();
     const lower = raw.toLowerCase();
@@ -763,12 +812,12 @@ function createMineflayerBot(slotId, cfg) {
   b.on("playerLeft", () => {
     if (b === state.bot) emitStatus(slotId);
   });
-  b.on("error", (err) => {
+  b.on("error", (err: any) => {
     if (b !== state.bot) return;
     emitLog(slotId, "[Error]", String(err?.message ?? err));
   });
 
-  b.on("kicked", (reason) => {
+  b.on("kicked", (reason: any) => {
     if (b !== state.bot) return;
     const msg = parseKickReason(reason);
     emitLog(slotId, "[System]", `❌ Kicked: ${msg}`);
@@ -781,7 +830,7 @@ function createMineflayerBot(slotId, cfg) {
     scheduleReconnect(state, isGhost ? GHOST_DELAY_MS : undefined);
   });
 
-  b.on("end", (reason) => {
+  b.on("end", (reason: any) => {
     if (b !== state.bot) return;
     emitLog(slotId, "[System]", `🔌 Disconnected: ${String(reason ?? "unknown")}`);
     sendDiscordWebhook(`[-] **Slot ${slotId} Disconnected**: ${String(reason ?? "unknown")}`, 0xf87171);
@@ -790,7 +839,7 @@ function createMineflayerBot(slotId, cfg) {
   });
 }
 
-function startSlot(slotId) {
+function startSlot(slotId: string) {
   const data = getSlotData(slotId);
   if (!data?.registered) return { ok: false, error: "Slot not registered" };
   if (!data.host) return { ok: false, error: "No host configured" };
@@ -806,7 +855,7 @@ function startSlot(slotId) {
   return { ok: true };
 }
 
-function stopSlot(slotId) {
+function stopSlot(slotId: string) {
   const state = getState(slotId);
   state.shouldReconnect = false;
   state.isReconnecting = false;
@@ -817,15 +866,18 @@ function stopSlot(slotId) {
   return { ok: true };
 }
 
-function restartSlot(slotId) {
+function restartSlot(slotId: string) {
   stopSlot(slotId);
   setTimeout(() => startSlot(slotId), 2_000);
   return { ok: true };
 }
 
-// REST EXPRESS ROUTES
+// ================================================================
+//  EXPRESS SLOT CONTROL API ROUTES
+// ================================================================
+
 app.get("/api/slots", (_req, res) => {
-  const result = {};
+  const result: Record<string, any> = {};
   for (let i = 1; i <= MAX_SLOTS; i++) {
     const id = String(i);
     const data = slotsData[id] ?? null;
@@ -848,7 +900,7 @@ app.get("/api/slot/:id/status", (req, res) => {
   const state = getState(id);
   const data = getSlotData(id);
   const online = !!state.bot?.entity;
-  const players = online ? Object.values(state.bot.players ?? {}).map(p => p.username) : [];
+  const players = online ? Object.values(state.bot.players ?? {}).map((p: any) => p.username) : [];
   res.json({
     slotId: id,
     registered: data?.registered ?? false,
@@ -956,7 +1008,10 @@ app.get("/api/admin/slot/:id/password", requireAdmin, (req, res) => {
   res.json({ slotId: req.params.id, username: d.username, password: plain || "(no password set)" });
 });
 
-// DASHBOARD UI & HEALTH ENDPOINTS
+// ================================================================
+// DASHBOARD & HTML INTERFACE ROUTES (FROM INDEX.JS)
+// ================================================================
+
 app.get("/ping", (_req, res) => res.send("pong"));
 
 app.get("/health", (_req, res) => {
@@ -977,6 +1032,7 @@ app.get("/api/healthz", (_req, res) => {
   res.json({ status: "ok", activeBots });
 });
 
+// Primary HTML Dashboard View
 app.get("/", (_req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -988,29 +1044,55 @@ app.get("/", (_req, res) => {
         <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
         <style>
           *, *::before, *::after { box-sizing: border-box; }
-          body { font-family: 'Inter', sans-serif; background: #0d1117; color: #e6edf3; margin: 0; padding: 24px; display: flex; justify-content: center; }
+          body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: #0d1117;
+            color: #e6edf3;
+            margin: 0;
+            padding: 24px;
+            display: flex;
+            justify-content: center;
+          }
           main { width: 100%; max-width: 650px; }
           header { margin-bottom: 24px; }
           header h1 { font-size: 26px; font-weight: 700; color: #f0f6fc; margin: 0; }
           header p { font-size: 14px; color: #8b949e; margin: 6px 0 0; }
-          .status-section { border-radius: 12px; padding: 20px 24px; margin-bottom: 16px; display: flex; align-items: center; gap: 16px; }
-          .status-section.online { background: #0d2218; border: 2px solid #238636; }
+          .status-section {
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+          }
+          .status-section.online  { background: #0d2218; border: 2px solid #238636; }
           .status-section.offline { background: #200d0d; border: 2px solid #da3633; }
-          .status-icon { width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
-          .status-icon.online { background: #238636; }
+          .status-icon {
+            width: 44px; height: 44px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 20px; flex-shrink: 0;
+          }
+          .status-icon.online  { background: #238636; }
           .status-icon.offline { background: #da3633; }
           .status-label { font-size: 18px; font-weight: 700; }
-          .status-label.online { color: #3fb950; }
+          .status-label.online  { color: #3fb950; }
           .status-label.offline { color: #f85149; }
           .status-detail { font-size: 13px; color: #8b949e; margin-top: 3px; }
-          .stat-card { background: #161b22; border: 1px solid #21262d; border-radius: 10px; padding: 16px 20px; margin-bottom: 10px; }
+          .stat-card {
+            background: #161b22; border: 1px solid #21262d;
+            border-radius: 10px; padding: 16px 20px; margin-bottom: 10px;
+          }
           dt { font-size: 12px; color: #8b949e; font-weight: 600; margin-bottom: 4px; }
           dd { margin: 0; font-size: 17px; font-weight: 600; color: #e6edf3; }
           .btn-grid { display: grid; gap: 10px; margin-bottom: 10px; grid-template-columns: 1fr 1fr; }
-          .btn { min-height: 48px; border-radius: 10px; font-size: 14px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; text-decoration: none; font-family: inherit; border: none; }
+          .btn {
+            min-height: 48px; border-radius: 10px; font-size: 14px; font-weight: 700;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            text-decoration: none; font-family: inherit; border: none;
+          }
           .btn-start { border: 2px solid #238636; background: #0d2218; color: #3fb950; }
-          .btn-stop { border: 2px solid #da3633; background: #200d0d; color: #f85149; }
-          .btn-sec { border: 1px solid #21262d; background: #161b22; color: #8b949e; }
+          .btn-stop  { border: 2px solid #da3633; background: #200d0d; color: #f85149; }
+          .btn-sec   { border: 1px solid #21262d; background: #161b22; color: #8b949e; }
           .btn-sec:hover { background: #21262d; color: #c9d1d9; }
         </style>
       </head>
@@ -1077,11 +1159,11 @@ app.get("/", (_req, res) => {
             } catch (e) {}
           }
           async function startSlot(id) {
-            await fetch('/api/slot/' + id + '/start', { method: 'POST' });
+            const r = await fetch('/api/slot/' + id + '/start', { method: 'POST' });
             update();
           }
           async function stopSlot(id) {
-            await fetch('/api/slot/' + id + '/stop', { method: 'POST' });
+            const r = await fetch('/api/slot/' + id + '/stop', { method: 'POST' });
             update();
           }
           setInterval(update, 3000);
@@ -1138,7 +1220,7 @@ app.get("/tutorial", (_req, res) => {
 
 app.get("/logs", (_req, res) => {
   const logs = getGlobalLogs();
-  const escapeHTML = (str) =>
+  const escapeHTML = (str: string) =>
     str.replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[m] || m);
 
   res.send(`
@@ -1152,7 +1234,10 @@ app.get("/logs", (_req, res) => {
         <style>
           body { font-family: 'Inter', sans-serif; background: #0d1117; color: #e6edf3; margin: 0; padding: 24px; }
           main { max-width: 760px; margin: 0 auto; }
-          .log-box { background: #0d1117; border: 1px solid #21262d; border-radius: 12px; padding: 16px; height: 480px; overflow-y: auto; font-family: monospace; font-size: 13px; line-height: 1.6; }
+          .log-box {
+            background: #0d1117; border: 1px solid #21262d; border-radius: 12px;
+            padding: 16px; height: 480px; overflow-y: auto; font-family: monospace; font-size: 13px; line-height: 1.6;
+          }
           .log-entry { display: block; word-break: break-all; }
           .console-row { display: flex; gap: 10px; margin-top: 12px; }
           .input { flex: 1; background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 10px; color: #fff; font-family: monospace; }
@@ -1215,7 +1300,7 @@ app.post("/command", (req, res) => {
     try {
       state.bot.chat(cmd);
       res.json({ success: true, msg: `Sent to slot 1: ${cmd}` });
-    } catch (e) {
+    } catch (e: any) {
       res.json({ success: false, msg: e.message });
     }
   } else {
@@ -1223,7 +1308,7 @@ app.post("/command", (req, res) => {
   }
 });
 
-// Socket.io
+// ── Socket.IO Connection ──────────────────────────────────────────
 io.on("connection", (socket) => {
   addGlobalLog(`[WS] Client connected: ${socket.id}`);
   for (let i = 1; i <= MAX_SLOTS; i++) {
@@ -1234,7 +1319,7 @@ io.on("connection", (socket) => {
   });
 });
 
-// Boot auto-start
+// ── Auto-start registered slots on boot ─────────────────────────
 for (const [id, data] of Object.entries(slotsData)) {
   if (data?.registered && data?.host) {
     addGlobalLog(`[Boot] Auto-starting slot ${id}...`);
@@ -1242,7 +1327,7 @@ for (const [id, data] of Object.entries(slotsData)) {
   }
 }
 
-// Self Ping Keep-Alive
+// ── Self-ping Keep-Alive ──────────────────────────────────────────
 const pingTarget =
   process.env.APP_URL ||
   process.env.RENDER_EXTERNAL_URL ||
@@ -1256,13 +1341,14 @@ if (pingTarget) {
     try {
       await fetch(selfUrl);
       addGlobalLog(`[KeepAlive] ✅ Self-ping OK — ${new Date().toLocaleTimeString()}`);
-    } catch (e) {
+    } catch (e: any) {
       addGlobalLog(`[KeepAlive] ⚠️ Ping failed: ${e.message}`);
     }
   }, interval);
   addGlobalLog(`[KeepAlive] 🚀 Self-ping started → ${selfUrl}`);
 }
 
+// ── Immortal Crash Recovery Process Event Handlers ────────────────
 process.on("uncaughtException", (err) => {
   addGlobalLog(`[FATAL] Uncaught Exception: ${err.message || err}`);
 });
@@ -1271,6 +1357,7 @@ process.on("unhandledRejection", (reason) => {
   addGlobalLog(`[FATAL] Unhandled Rejection: ${reason}`);
 });
 
+// ── HTTP Listening Server ─────────────────────────────────────────
 httpServer.listen(PORT, () => {
   addGlobalLog(`==================================================`);
   addGlobalLog(` Minecraft AFK Bot Manager Server Running on Port ${PORT}`);
